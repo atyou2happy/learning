@@ -15,6 +15,7 @@
 ## 目录
 
 - [傅里叶变换](topics/fourier-transform.html) — 信号 · 数学 · 3 个交互演示
+- [Attention 机制](topics/attention.html) — 深度学习 · 3 个交互演示
 
 ## 特性
 
