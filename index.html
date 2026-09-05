@@ -13,8 +13,8 @@
   <div class="topic-kicker">KNOWLEDGE LAB</div>
   <h1>知识解构实验室</h1>
   <p>每一个知识点，一个自包含的交互页面。<br>
-  从直觉出发，穿过可视化、数学与抽象，抵达本质 —— 一次阅读完成深度认知。</p>
-  <div class="pill">零依赖 · 离线可用 · 交互式可视化</div>
+  公式、图解、流程图与真实数值案例 —— 一次阅读完成深度认知。</p>
+  <div class="pill">零依赖 · 离线可用 · 交互式模拟</div>
 </div>
 
 <main class="container" style="padding-bottom:80px">
@@ -22,31 +22,21 @@
   <h3 style="margin-top:10px">探索路径</h3>
   <div class="grid cols-2">
 
-    <a class="topic-card" href="topics/fourier-transform.html">
+    <a class="topic-card" href="topics/pagedattention.html">
       <span class="tc-arrow">→</span>
-      <div class="tc-level">信号 · 数学</div>
-      <h3>傅里叶变换</h3>
-      <p>把任何信号拆成正弦波的叠加。为什么一个积分式能同时是数学、物理与工程的核心工具？从"听音辨器"的直觉一路推到频域的本质。</p>
+      <div class="tc-level">LLM 推理 · 系统</div>
+      <h3>PagedAttention</h3>
+      <p>大模型推理 90% 的显存装的是 KV Cache。vLLM 如何用操作系统的分页思想，把显存利用率从 30% 提到 96%，同硬件吞吐翻 10 倍 —— 策略模拟器亲手对比三种分配命运。</p>
       <div class="tc-footer">
-        <span>五层认知</span><span>3 个交互演示</span><span>≈ 25 分钟</span>
-      </div>
-    </a>
-
-    <a class="topic-card" href="topics/attention.html">
-      <span class="tc-arrow">→</span>
-      <div class="tc-level">深度学习 · 机制</div>
-      <h3>Attention 机制</h3>
-      <p>一台「可微分的查字典机器」，如何长成 GPT 的大脑、ViT 的眼睛、CLIP 的翻译官。从软查找直觉走到 Attention is All You Need 的那行公式。</p>
-      <div class="tc-footer">
-        <span>五层认知</span><span>3 个交互演示</span><span>≈ 25 分钟</span>
+        <span>图解 + 公式</span><span>策略模拟器</span><span>≈ 15 分钟</span>
       </div>
     </a>
 
     <div class="topic-card" style="opacity:.45;cursor:default">
       <span class="tc-arrow">…</span>
-      <div class="tc-level">数学 · 逼近</div>
+      <div class="tc-level">规划中</div>
       <h3>下一个知识点</h3>
-      <p>可能是：梯度下降 / 贝叶斯定理 / 卷积 / 虚数 i / 熵 …… 由你决定。建议从工具箱里挑一个"你以为懂了"的概念开刀。</p>
+      <p>FlashAttention / Continuous Batching / Mamba / 采样策略 …… 挑一个「你以为懂了」的概念开刀。</p>
       <div class="tc-footer"><span>规划中</span></div>
     </div>
 
@@ -55,16 +45,16 @@
   <h3>这套页面怎么读</h3>
   <div class="grid cols-3">
     <div class="card">
-      <h4>① 不跳层</h4>
-      <p>直觉 → 可视化 → 数学 → 抽象 → 应用，顺序不可颠倒。数学层永远建立在刚才"看见"的东西之上。</p>
+      <h4>① 图先于文</h4>
+      <p>每层以图、公式、流程图开路，文字只做注解。看图能懂的部分不必读字。</p>
     </div>
     <div class="card">
       <h4>② 动手玩</h4>
-      <p>每一层至少一个交互演示。滑块拉一拉，比读十遍公式更能改变直觉。</p>
+      <p>交互演示的每个数字都是真实模拟。拖滑块、点按钮，比读十遍文字更能改变直觉。</p>
     </div>
     <div class="card">
       <h4>③ 答题过关</h4>
-      <p>层与层之间设认知检查，答错说明上一层的直觉还没建立，回去再玩一次演示。</p>
+      <p>层间认知检查，干扰项即常见误解。答错 = 上层直觉未建立，回去再玩一次演示。</p>
     </div>
   </div>
 

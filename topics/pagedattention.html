@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PagedAttention — 大模型推理的显存管理革命</title>
+<meta name="description" content="vLLM 核心技术：KV Cache 分页管理。公式、图解、流程图与真实数值模拟。">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .simwrap { background:#0a0d12; border-radius:10px; padding:16px; }
+  .poolbar { display:flex; height:44px; border:1px solid #30363d; border-radius:8px; overflow:hidden; background:#161b22; }
+  .poolbar .cell { flex:1; border-right:1px solid #0d1117; min-width:2px; }
+  .poolbar .cell:last-child { border-right:none; }
+  .poolbar .cell.free { background:#161b22; }
+  .poolbar .cell.resv {
+    background:repeating-linear-gradient(45deg, rgba(255,255,255,.06) 0 4px, transparent 4px 8px), #21262d;
+  }
+  .simlabel { font-size:13px; color:var(--text-dim); margin:14px 0 6px; }
+  .simlabel:first-child { margin-top:0; }
+  .meta { font-size:12.5px; color:var(--text-dim); margin-top:8px; line-height:1.9; }
+  .meta b { color:var(--text); font-family:var(--font-mono); letter-spacing:1px; }
+  .meta .warn { color:var(--warn); font-family:var(--font-mono); }
+  .meta .bad { color:#f85149; }
+  .scenebar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .scenebtn {
+    background:var(--bg-card); border:1px solid #30363d; color:var(--text);
+    padding:6px 13px; border-radius:8px; cursor:pointer; font-size:12.5px; transition:all .2s;
+  }
+  .scenebtn:hover { border-color:var(--accent); }
+  .scenebtn.on { border-color:var(--accent); color:var(--accent); background:rgba(88,166,255,.1); font-weight:600; }
+  .vs-table td.ok { color:var(--accent3); font-weight:600; }
+  .vs-table td.bad { color:#f85149; }
+  .vs-table td.warn { color:var(--warn); }
+</style>
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 问题</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② KV Cache</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 三种策略</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 分页方案</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 实测</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>PagedAttention</div>
+    <div class="topic-kicker">LLM INFERENCE · SYSTEMS</div>
+    <h1 class="topic-title">PagedAttention</h1>
+    <p class="topic-sub">大模型推理时，90% 的显存装的是 KV Cache —— 它怎么存、怎么分、怎么复用，决定了你的 GPU 能同时服务多少人。vLLM 用一个操作系统级的想法解决了它。</p>
+    <div class="topic-meta">
+      <span class="tag">图解 + 公式</span>
+      <span class="tag">策略模拟器</span>
+      <span class="tag">≈ 15 分钟</span>
+      <span class="tag">前置：Attention 公式</span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<!-- ================================================================ L1 -->
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">问题：显存瓶颈不在模型，在 KV Cache</h2></div>
+  <p class="level-goal">本层目标：一张图 + 三个数字，看清要解决什么。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 一个推理请求的一生（横轴 = token）</div>
+    <canvas id="lifeCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">prompt 一次性预填充写入 KV；之后每生成 1 个 token 追加 1 份 K 和 V —— 显存占用是斜率恒定的直线，直到序列结束才释放。</p>
+  </div>
+
+  <div class="formula">
+    KV 显存(单序列) = 2 (K,V) × n<sub>layers</sub> × n<sub>kv-heads</sub> × d<sub>head</sub> × ℓ × b
+    <span class="ann">ℓ = 序列长度，b = 2 bytes (fp16)。每生成一个 token，此式 +1 份增量</span>
+  </div>
+
+  <div class="grid cols-3">
+    <div class="card">
+      <div class="num-big" data-count="12" data-suffix="x">0</div>
+      <p>13B 模型权重 ~26 GB，并发 50 请求的 KV Cache 需求可达其 <strong>10 倍量级</strong> —— 服务能力被 KV 显存锁死</p>
+    </div>
+    <div class="card">
+      <div class="num-big" data-count="38" data-suffix="%">0</div>
+      <p>旧系统（FasterTransformer / Orca）KV Cache 显存利用率实测仅 <strong>20.4%–38.4%</strong>，其余全是预留与碎片浪费</p>
+    </div>
+    <div class="card">
+      <div class="num-big" data-count="24" data-suffix="x">0</div>
+      <p>vLLM：同 GPU 同模型，吞吐最高 <strong>24 倍</strong>提升 —— 靠的不是更大的模型，是更聪明的存法</p>
+    </div>
+  </div>
+
+  <blockquote class="intuition">
+    <p><strong>问题本质</strong>：权重只读且尺寸固定；KV Cache 随请求动态到达/结束、长度不可预知 —— 它是唯一需要「动态内存分配」的大块显存。这题操作系统 60 年前就解过。</p>
+  </blockquote>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>推理服务的第一瓶颈为什么是 KV Cache 的「管理方式」而不是模型本身？</p>
+    <div class="options">
+      <button class="opt">KV Cache 的计算量远大于权重前向</button>
+      <button class="opt">KV Cache 占显存大且动态变化，旧系统利用率仅 2~4 成，碎片把并发能力锁死</button>
+      <button class="opt">KV Cache 必须放在 CPU 内存，PCIe 传输慢</button>
+    </div>
+    <div class="explain">权重静态可精确规划；KV Cache 动态增长、长度不可预知，分配策略决定同样 80 GB 显存能装几个请求 —— 利用率从 30% 提到 96%+，等于免费扩容 3 倍。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L2 -->
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">KV Cache：为什么缓存、为什么线性膨胀</h2></div>
+  <p class="level-goal">本层目标：两张图 + 一个公式，看懂 KV Cache 的必要性与增长规律。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 没有缓存：每步重算全部历史 K/V —— O(L²) 重复劳动</div>
+    <canvas id="recomputeCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">生成第 t 个词需要全部前文的 K、V —— 若不缓存，第 t 步重算 t 行。总计算 ∑t = L(L+1)/2 ∈ O(L²)，其中绝大部分是重复。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 有缓存：每步只算增量 1 行 —— O(L) 显存换 O(L) 计算</div>
+    <canvas id="kvCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">左：K/V 矩阵逐行追加，橙色 = 本步新增行。右：显存占用对 L 严格线性 —— 这条直线的斜率就是上一层的公式。</p>
+  </div>
+
+  <div class="formula">
+    KV(L) = 2 · n<sub>layers</sub> · n<sub>kv</sub> · d<sub>head</sub> · L · b &nbsp;&nbsp;→&nbsp;&nbsp; LLaMA-7B, L=2048, fp16: 2×32×32×128×2048×2 = <strong>1.0 GB / 序列</strong>
+    <span class="ann">A100-80GB 除去 14 GB 权重，理论上限 ≈ 66 个并发 —— 若利用率 100%。旧系统实际只装 ~20 个</span>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>LLaMA-7B（n_layers=32, GQA 关闭 n_kv=32, d_head=128, fp16），单序列 L=2048 的 KV Cache 是多大？</p>
+    <div class="options">
+      <button class="opt">1.0 GB</button>
+      <button class="opt">64 MB</button>
+      <button class="opt">14 GB</button>
+    </div>
+    <div class="explain">2×32×32×128×2048×2 = 2³⁰ bytes = 1.0 GB。直觉：KV 随长度线性、随并发叠加 —— 两把刻度尺一起量出服务容量。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L3 -->
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">三种分配策略：同一场景，三种命运</h2></div>
+  <p class="level-goal">本层目标：核心 DEMO。<b>100 格显存池、7 个场景、三种策略同台对比</b>，每个数字都是真实模拟。斜线 = 预留未用，彩色 = 实际占用。</p>
+
+  <div class="viz">
+    <div class="viz-title">DEMO · 显存分配策略模拟器（点按钮逐场景推进）</div>
+    <div class="scenebar">
+      <button class="scenebtn on" data-scene="1">S1 G到(24,长驻)</button>
+      <button class="scenebtn" data-scene="2">S2 A到(10)</button>
+      <button class="scenebtn" data-scene="3">S3 H到(24,长驻)</button>
+      <button class="scenebtn" data-scene="4">S4 B到(12)</button>
+      <button class="scenebtn" data-scene="5">S5 D到(28,长驻)</button>
+      <button class="scenebtn" data-scene="6">S6 A、B完成释放</button>
+      <button class="scenebtn" data-scene="7">S7 E到(22) 终审</button>
+    </div>
+    <div class="simwrap">
+      <div class="simlabel">策略一 · 静态预留（每请求预留最大 30 格）</div>
+      <div class="poolbar" id="bar1"></div>
+      <div class="meta" id="meta1"></div>
+      <div class="simlabel">策略二 · 连续动态分配（first-fit，按当前长度）</div>
+      <div class="poolbar" id="bar2"></div>
+      <div class="meta" id="meta2"></div>
+      <div class="simlabel">策略三 · PagedAttention（块 = 4 格，块表映射）</div>
+      <div class="poolbar" id="bar3"></div>
+      <div class="meta" id="meta3"></div>
+    </div>
+    <p class="viz-note">看到 S7：<strong>策略一</strong>早已拒绝 B 和 D（无法预留 30）；<strong>策略二</strong> B、D 进来了，E 却卡死 —— 空闲 24 ≥ 22，但被切成 12+12 两段，无一段连续 22；<strong>策略三</strong> E 顺利入住 —— 拿走 A、B 走后散落的 6 个物理块。碎片从「无解」变成「只剩每序列末块 &lt; 4 格」。</p>
+  </div>
+
+  <h3><span class="sec-idx">3.1</span>终态账单（S7）</h3>
+  <table class="vs-table">
+    <tr><th></th><th>策略一 · 预留</th><th>策略二 · 连续</th><th>策略三 · 分页</th></tr>
+    <tr><td>接受 / 总请求</td><td class="bad">4 / 7（拒 B、D、E）</td><td class="bad">5 / 7（拒 E）</td><td class="ok">6 / 7（仅受总容量约束）</td></tr>
+    <tr><td>预留浪费</td><td class="bad">90 − 70 = 20 格</td><td class="ok">0</td><td class="ok">0</td></tr>
+    <tr><td>外部碎片</td><td class="ok">0（预留成段）</td><td class="bad">24 − 12 = 12 格被位置困死</td><td class="ok">≈ 0（块为单位）</td></tr>
+    <tr><td>内部碎片</td><td class="ok">—</td><td class="ok">0</td><td class="ok">每序列末块 &lt; 4 格</td></tr>
+    <tr><td>可服务并发</td><td class="bad">⌊100/30⌋ = 3</td><td class="warn">取决于到达/离开顺序</td><td class="ok">≈ ⌈100 / 平均块需求⌉</td></tr>
+  </table>
+
+  <h3><span class="sec-idx">3.2</span>连续分配的死刑判决书 —— 外部碎片</h3>
+  <div class="formula">
+    外部碎片 = 总空闲 − 最大连续空闲段 &nbsp;&nbsp;⇒&nbsp;&nbsp; S7 时刻 = 24 − 12 = <strong>12 格</strong>（占池 12%）
+    <span class="ann">碎片不是「坏掉的显存」，是「被位置困住的显存」—— 加内存救不了，新内存同样会碎</span>
+  </div>
+  <p>操作系统给出了全部候选答案：压缩整理（要搬迁正在服务的序列，停机不可接受）、best-fit / buddy（缓解不根治）、<strong>分页</strong>（直接放弃连续性约束）—— vLLM 选了最后这个。</p>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>策略二在 S7 卡死：总空闲 24 ≥ 需求 22。为什么 E 进不来？</p>
+    <div class="options">
+      <button class="opt">22 超过了单请求长度上限</button>
+      <button class="opt">first-fit 太笨，换 best-fit 就能放下</button>
+      <button class="opt">空闲被切成 12+12 两段，任何一段都 &lt; 22 —— 卡住请求的是位置，不是总量</button>
+    </div>
+    <div class="explain">教科书级<strong>外部碎片</strong>。best-fit 无解（甚至更碎），压缩需停机搬迁在线序列。唯一根治：砍掉「必须连续」这个约束 —— 把序列拆成固定小块，散布存放，块表索引。这就是 LAYER 4。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L4 -->
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">PagedAttention：把操作系统装进 Attention</h2></div>
+  <p class="level-goal">本层目标：两张结构图 + 一张流程图，看懂 vLLM 论文 Fig. 2/3 在说什么。</p>
+
+  <h3><span class="sec-idx">4.1</span>虚拟地址 → 块表 → 物理块</h3>
+  <div class="viz">
+    <div class="viz-title">图 4 · 逻辑连续，物理离散（对应论文 Fig. 3）</div>
+    <canvas id="blockTableCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">每个序列持一张<strong>块表</strong>：逻辑块号 → 物理块号。注意力核直接按块表寻址 gather K/V —— 逻辑上序列是连续的，物理上块散布全池。</p>
+  </div>
+  <div class="formula">
+    浪费上界 = 每序列 &lt; 1 块 &nbsp;⇒&nbsp; 平均 B/2 槽位 &nbsp;⇒&nbsp; vLLM 实测浪费 <strong>&lt; 4%</strong>（论文 Fig. 6）
+    <span class="ann">对比：预留制 ~60%、连续制碎片 30%+ —— 一个数量级的差距</span>
+  </div>
+
+  <h3><span class="sec-idx">4.2</span>decode 一步的完整流程</h3>
+  <div class="viz">
+    <div class="viz-title">图 5 · 生成一个 token 的全流程（含新 K/V 落块逻辑）</div>
+    <canvas id="flowCanvas" style="width:100%;height:330px"></canvas>
+    <p class="viz-note">读块表 → 逐物理块 gather K/V → attention → 采样出新 token → 算它的新 K/V → 末块有空位则写入，否则申请新物理块。虚线 = 回到下一步。</p>
+  </div>
+
+  <h3><span class="sec-idx">4.3</span>白送的能力：物理块级复用</h3>
+  <div class="viz">
+    <div class="viz-title">图 6 · prefix 共享：system prompt 只存一份（写时复制）</div>
+    <canvas id="prefixCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">连续分配下不可能：块物理复用要求「同一份数据多处引用」，只有块表间接层才做得到。多轮对话 / 共享 system prompt / beam search 候选共享，显存再省 30%+。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>序列 A 的逻辑块 7 → 物理块 3，逻辑块 8 → 物理块 17。注意力核因此必须做什么？</p>
+    <div class="options">
+      <button class="opt">报错：逻辑连续性被破坏</button>
+      <button class="opt">按块表逐块 gather K/V，不能假设 K/V 在显存里连续存放</button>
+      <button class="opt">先压缩整理显存再计算</button>
+    </div>
+    <div class="explain">这正是虚拟内存精髓：连续的是逻辑视图，散布的是物理存储。代价是注意力核从「读连续矩阵」变成「查表 + 逐块 gather」—— vLLM 为此专门重写了 CUDA kernel，在 kernel 内解析块表。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L5 -->
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">实测：论文级数据与工程参数</h2></div>
+  <p class="level-goal">本层目标：把前四层认知落到部署参数上。</p>
+
+  <h3><span class="sec-idx">5.1</span>vLLM vs 基线（论文实测，LLaMA-13B）</h3>
+  <table>
+    <tr><th>系统</th><th>KV 利用率</th><th>归一化吞吐</th><th>分配方式</th></tr>
+    <tr><td>FasterTransformer</td><td class="bad">~25%</td><td>1.0x</td><td>静态预留 max_len</td></tr>
+    <tr><td>Orca</td><td class="warn">~35%</td><td>2.7x</td><td>连续动态分配</td></tr>
+    <tr><td><strong>vLLM (PagedAttention)</strong></td><td class="ok"><strong>&gt; 96%</strong></td><td class="ok"><strong>7.5–14x（峰值 24x）</strong></td><td>分页 + 块表</td></tr>
+  </table>
+
+  <h3><span class="sec-idx">5.2</span>部署参数速查（对应前文概念）</h3>
+  <table>
+    <tr><th>参数</th><th>对应概念</th><th>权衡</th></tr>
+    <tr><td><code>block_size</code> (16/32)</td><td>图 4 的物理块</td><td>小 → 内部碎片少但块表长；大 → 反之</td></tr>
+    <tr><td><code>gpu_memory_utilization</code></td><td>图 1 的池容量</td><td>高 → 并发高；过高 → OOM</td></tr>
+    <tr><td><code>max_num_seqs</code></td><td>L3 的并发上限</td><td>受 KV 池剩余容量硬约束</td></tr>
+    <tr><td><code>enable_prefix_caching</code></td><td>图 6 的块复用</td><td>多轮对话/共享前缀场景再省 30%+</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>推理显存大头是 KV Cache：2·n_layers·n_kv·d_head·L·b，随长度线性、随并发叠加（L1-L2）</li>
+      <li>缓存是必须的：不缓存则计算 O(L²)，缓存后 O(L) —— 用显存买计算（L2）</li>
+      <li>预留制死于预留浪费，连续制死于外部碎片 —— 空闲总量够、位置不连续，加内存无用（L3）</li>
+      <li>分页：逻辑连续物理离散，块表寻址，浪费 &lt; 4%；块级复用让 prefix 共享成为白送能力（L4）</li>
+      <li>同硬件吞吐 7.5–14x：没有新模型、没有新数学，只是把操作系统装进了 attention kernel（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>KV Cache</dt><dd>注意力 K/V 的增量缓存：避免 O(L²) 重算，代价 O(L) 显存。</dd>
+    <dt>内部碎片</dt><dd>块内已分配未使用的槽位。分页下每序列最多浪费 &lt; 1 块。</dd>
+    <dt>外部碎片</dt><dd>空闲总量足够但位置不连续。预留制无此问题但有预留浪费；连续制被它锁死。</dd>
+    <dt>块表 (block table)</dt><dd>逻辑块 → 物理块的每序列映射表，注意力核的寻址依据。</dd>
+    <dt>写时复制 (copy-on-write)</dt><dd>多个序列共享物理块，仅在内容分歧点才复制 —— beam search / prefix 共用的基础。</dd>
+    <dt>prefix caching</dt><dd>跨请求复用相同前缀的物理块；多轮对话场景大幅省显存。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">延伸路线：FlashAttention（计算角度）· Continuous Batching（调度角度）· Speculative Decoding（生成角度）—— 推理加速的另外三条战线。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · PagedAttention · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="pagedattention.js"></script>
+</body>
+</html>

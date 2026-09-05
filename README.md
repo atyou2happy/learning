@@ -2,38 +2,40 @@
 
 > 由浅入深、由直观到抽象，一次完成对一个知识点的深度认知。
 
-每个知识点一个自包含的交互式 HTML 页面，遵循**五层认知结构**：
-
-| 层 | 名称 | 目的 |
-|---|------|------|
-| ① | 直觉 Intuition | 无公式建立核心图景 |
-| ② | 可视化 Visualization | 交互演示，亲眼看见 |
-| ③ | 数学 Mathematics | 符号与几何逐项对应 |
-| ④ | 抽象 Abstraction | 线性代数/范畴视角，认知升维 |
-| ⑤ | 应用 Applications | 落地到真实工程与科学 |
+每个知识点一个自包含的交互式页面。**风格：图先于文** —— 公式、图解、流程图、真实数值案例开路，文字只做注解。
 
 ## 目录
 
-- [傅里叶变换](topics/fourier-transform.html) — 信号 · 数学 · 3 个交互演示
-- [Attention 机制](topics/attention.html) — 深度学习 · 3 个交互演示
+- [PagedAttention](topics/pagedattention.html) — LLM 推理 · 显存管理 · 三策略模拟器
+
+## 页面结构（五层）
+
+| 层 | 名称 | 形式 |
+|---|------|------|
+| ① | 问题 Problem | 一张图 + 三个数字 |
+| ② | 机制 Mechanism | 图解 + 公式 |
+| ③ | 对比 Contrast | 交互模拟器（真实数值） |
+| ④ | 方案 Solution | 结构图 + 流程图 |
+| ⑤ | 实测 Evidence | 论文数据 + 参数速查 |
 
 ## 特性
 
 - 零依赖、纯静态，离线可用
-- 原生 Canvas 交互可视化（无框架）
-- 层间认知检查（答对再往下走）
+- 原生 Canvas 图解 / DOM 模拟器（无框架）
+- 层间认知检查（干扰项 = 常见误解）
 - 深色数学可视化风格，响应式
 
 ## 开发
 
 ```
-topics/           知识点页面（一页一知识）
-assets/style.css  共享设计系统
-assets/app.js     共享骨架脚本（进度条/导航/quiz）
-index.html        知识地图首页
-TEMPLATE.md       新页面写作模板
+topics/<slug>.html   知识点页面（结构 + 文案）
+topics/<slug>.js     该页全部演示逻辑（node --check 可校验）
+assets/style.css     共享设计系统
+assets/app.js        共享骨架（进度条/导航/quiz）
+index.html           知识地图
+TEMPLATE.md          写作规范
 ```
 
-本地预览：直接双击任意 HTML，或 `python -m http.server`。
+本地预览：直接双击 HTML，或 `python -m http.server`。
 
-在线浏览：GitHub Pages → https://atyou2happy.github.io/learning/
+在线浏览：https://atyou2happy.github.io/learning/
