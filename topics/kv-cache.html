@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KV Cache — 大模型推理的显存账本</title>
+<meta name="description" content="KV Cache 是什么、为什么是 K/V 不是 Q、到底多大、怎么压。公式、图解与交互计算器。">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .calcs { background:#0a0d12; border:1px solid #30363d; border-radius:10px; padding:16px; }
+  .calcs .row { display:flex; flex-wrap:wrap; gap:10px 18px; margin-bottom:14px; }
+  .calcs label { font-size:12px; color:var(--text-dim); display:flex; flex-direction:column; gap:4px; }
+  .calcs input { width:92px; background:#161b22; border:1px solid #30363d; color:var(--text);
+    border-radius:6px; padding:5px 8px; font-family:var(--font-mono); font-size:13px; }
+  .calcs input:focus { outline:none; border-color:var(--accent); }
+  .calcs .out { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
+  .calcs .obox { background:#161b22; border-radius:8px; padding:10px 12px; }
+  .calcs .obox .k { font-size:11.5px; color:var(--text-dim); }
+  .calcs .obox .v { font-family:var(--font-mono); font-size:15px; color:var(--green); margin-top:3px; }
+  .bars { margin-top:14px; }
+  .bar-row { margin-bottom:10px; }
+  .bar-row .bl { font-size:11.5px; color:var(--text-dim); margin-bottom:3px; }
+  .bar-track { height:14px; background:#161b22; border-radius:7px; overflow:hidden; border:1px solid #21262d; }
+  .bar-fill { height:100%; border-radius:7px; transition:width .25s; }
+  table td, table th { padding:9px 12px; }
+  table td.bad { color:#f85149; } table td.ok { color:var(--accent3); font-weight:600; }
+</style>
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 直觉</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 为什么是 K,V</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 到底多大</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 四个旋钮</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 落地</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>KV Cache</div>
+    <div class="topic-kicker">LLM INFERENCE · MEMORY</div>
+    <h1 class="topic-title">KV Cache</h1>
+    <p class="topic-sub">推理时模型权重一动不动，真正吃显存的是这份随每个 token 膨胀的「对话记忆」。本页算清它的账：为什么缓存的是 K 和 V、一个 token 值多少字节、以及公式里每个因子都是压缩旋钮。</p>
+    <div class="topic-meta">
+      <span class="tag">图解 + 公式</span>
+      <span class="tag">交互计算器</span>
+      <span class="tag">≈ 12 分钟</span>
+      <span class="tag">下篇：<a href="pagedattention.html" style="color:inherit">PagedAttention</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<!-- ================================================================ L1 -->
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">直觉：生成是滚雪球，显存是斜坡</h2></div>
+  <p class="level-goal">本层目标：一张图 + 三个数字，建立「KV Cache 随生成线性膨胀」的直觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 自回归生成：每一步都背着全部历史</div>
+    <canvas id="lifeCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">上：token 序列逐个生成。下：KV 占用是一条从 0 出发的直线 —— <strong>斜率恒定 = 每 token 单价固定</strong>，序列多长直线多长，直到序列结束才整条释放。</p>
+  </div>
+
+  <div class="grid cols-3">
+    <div class="card">
+      <div class="num-big">512<span style="font-size:22px">KB</span></div>
+      <p>LLaMA-7B 每个 token 的 KV 身价（fp16）—— 一个汉字的缓存 ≈ 一张小图</p>
+    </div>
+    <div class="card">
+      <div class="num-big">1.0<span style="font-size:22px">GB</span></div>
+      <p>同一个模型一条 2048 token 序列的 KV —— 权重才 14 GB，一条长对话就吃掉 1/14</p>
+    </div>
+    <div class="card">
+      <div class="num-big">32<span style="font-size:22px">GB</span></div>
+      <p>Qwen3-32B 单条 128k 长上下文序列的 KV —— 一张 A100 装一条序列就快满了</p>
+    </div>
+  </div>
+
+  <blockquote class="intuition">
+    <p><strong>一句话</strong>：权重是「房租」（固定），KV Cache 是「水电费」（按用量线性计费，按并发叠加）—— 服务容量被水电费锁死。</p>
+  </blockquote>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>对话结束后该请求的 KV Cache 会怎样？</p>
+    <div class="options">
+      <button class="opt">永久保留，下次对话直接复用</button>
+      <button class="opt">写回磁盘归档</button>
+      <button class="opt">整条释放，显存回收 —— 下次同话题对话要全部重算（除非有 prefix caching）</button>
+    </div>
+    <div class="explain">KV Cache 是请求级临时数据，随请求生灭。这就是多轮对话「重新发全文」的原因 —— 也是 <a href="pagedattention.html">PagedAttention</a> 的 prefix caching（块级复用）能白省 30%+ 的空间所在。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L2 -->
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">原理：为什么缓存的是 K 和 V，不是 Q</h2></div>
+  <p class="level-goal">本层目标：一张图 + 一行公式，看懂「K/V 必须全量保留、Q 用完即弃」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 注意力的不对称：Q 只需要当前行，K/V 需要全部行</div>
+    <canvas id="whyKVCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">生成第 t 个词：新 token 投影出 <b style="color:var(--accent)">q_new（1 行）</b>，去和历史 <b style="color:#58a6ff">每个 K 行</b>算相似度，再对 <b style="color:#f778ba">每个 V 行</b>加权求和。历史的 K、V 行行都被用到 —— 丢一行就失忆一段。</p>
+  </div>
+
+  <div class="formula">
+    score(q_new, k_i) = q_new · k_i &nbsp;&nbsp;→&nbsp;&nbsp; 输出 = Σ softmax(score)_i · v_i
+    <span class="ann">每个历史位置的 k_i、v_i 都参与计算 ⇒ 必须缓存；q_new 算完即弃 ⇒ 无需缓存</span>
+  </div>
+
+  <div class="formula">
+    不缓存：第 t 步重算 t 行 K/V ⇒ 总计算 L(L+1)/2 ∈ <b>O(L²)</b>；缓存后每步只算增量 ⇒ <b>O(L)</b>
+    <span class="ann">本质是一笔交易：用 O(L) 的显存，买掉 O(L) 级的重复计算（L²→L）</span>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么历史 token 的 Q 不需要缓存？</p>
+    <div class="options">
+      <button class="opt">Q 太大，显存放不下</button>
+      <button class="opt">历史 Q 只在「生成它们的那一步」参与计算，之后的每步只用到新的 q_new 与历史 K/V</button>
+      <button class="opt">Q 和 K 数学上等价，缓存一份即可</button>
+    </div>
+    <div class="explain">注意力是「新 token 对历史的查询」：查询方永远只有当前行，被查方（K）和取值方（V）是全部历史。不对称的角色 ⇒ 不对称的缓存策略。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L3 -->
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">尺寸：一个 token 值多少字节</h2></div>
+  <p class="level-goal">本层目标：一个公式拆出每个因子，再横向对比真实模型。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · per-token 尺寸分解（以 LLaMA-7B 为例）</div>
+    <canvas id="sizeCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">每层的每个 KV 头存一组 128 维向量 ×2（K 和 V）×2 bytes，再乘全部 32 层 —— <strong>512 KB / token</strong>。注意：这个数与序列长度无关，是「单价」。</p>
+  </div>
+
+  <div class="formula">
+    KV(单序列) = 2 · n<sub>layers</sub> · n<sub>kv_heads</sub> · d<sub>head</sub> · L · b
+    <span class="ann">L = 序列长度（token 数），b = 精度 bytes（fp16=2, int8=1）。单价 × 数量 = 总账</span>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 真实模型横向对比：MHA vs GQA 是分水岭</div>
+    <canvas id="modelsCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">同为 ~8B 级：LLaMA-7B(MHA) 512 KB/token vs LLaMA-3-8B(GQA-8) 128 KB/token —— <strong>4 倍差距全在 kv_heads 一个因子上</strong>（32→8）。模型更大不等于 KV 更贵。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>A100-80GB 跑 LLaMA-2-13B（26 GB 权重，预留 2 GB 激活），4k 上下文单序列 KV = 3.13 GB。最多同时服务几路？（容量按 100% 利用算）</p>
+    <div class="options">
+      <button class="opt">16 路（(80−26−2) / 3.13 ≈ 16）</button>
+      <button class="opt">约 54 路</button>
+      <button class="opt">不受限，KV 会自动换出到内存</button>
+    </div>
+    <div class="explain">52 / 3.13 ≈ 16.6 ⇒ 16 路。这是理论上限 —— 实际系统因预留与碎片只能装一半左右，正是 <a href="pagedattention.html">PagedAttention</a> 要解决的问题。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L4 -->
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">压缩：公式里的每个因子都是旋钮</h2></div>
+  <p class="level-goal">本层目标：四个压缩方向 + GQA 机制图，理解「压的是缓存不是模型」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 四个旋钮（按公式因子分类）</div>
+    <canvas id="knobsCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note">公式 KV = 2 · layers · kv_heads · d_head · L · b 中，除常数 2 外每个因子都被工程动过 —— 旋钮效果<strong>相乘</strong>。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · GQA：Query 头分组共享 K/V（红绿分水岭的由来）</div>
+    <canvas id="gqaCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">Q 头数量不变（不伤表达能力），只把「缓存端」的 K/V 头数砍掉 —— 32 头共享 8 份 KV。<strong>压的是缓存，不是模型本体</strong>。MQA 是极限版（全部共享 1 份，32x），代价是质量下降。</p>
+  </div>
+
+  <table>
+    <tr><th>旋钮</th><th>动哪个因子</th><th>收益</th><th>代价</th></tr>
+    <tr><td>GQA / MQA</td><td>n<sub>kv_heads</sub> ↓</td><td class="ok">4x / 32x</td><td>轻微质量损失（MQA 明显）</td></tr>
+    <tr><td>量化（int8 / int4）</td><td>b ↓</td><td class="ok">2x / 4x</td><td>重排误差，需校准</td></tr>
+    <tr><td>滑窗 / 丢弃旧 token</td><td>L ↓</td><td class="ok">视窗口</td><td>丢失长程记忆</td></tr>
+    <tr><td>跨层共享（YOCO 等）</td><td>n<sub>layers</sub> ↓</td><td class="ok">~2x</td><td>需重训 / 特殊结构</td></tr>
+    <tr><td>MLA（DeepSeek）</td><td>联合压缩 d_head·heads</td><td class="ok">≈ 10x+（对 MHA）</td><td>推理架构改动大</td></tr>
+  </table>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>GQA 把 KV 从 32 份压到 8 份，为什么模型质量几乎不掉？</p>
+    <div class="options">
+      <button class="opt">因为 K/V 本来就冗余，删掉 3/4 无影响</button>
+      <button class="opt">因为压缩后重新训练找回了精度</button>
+      <button class="opt">Query 侧 32 头全保留（表达力不变），只是让它们分组共享缓存 —— 砍的是缓存这份「账本」，不是注意力容量</button>
+    </div>
+    <div class="explain">GQA 训练时 query 头仍各算各的注意力（对着共享 K/V 的不同投影视角），表达能力保留在 Q 侧。这是「压缓存不压模型」最漂亮的一招，现代模型（LLaMA-3 / Qwen3 / Mistral）全用它。</div>
+  </div>
+</section>
+
+<!-- ================================================================ L5 -->
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：亲手算一遍容量账</h2></div>
+  <p class="level-goal">本层目标：交互计算器 + 部署现象对照表，把公式用起来。</p>
+
+  <div class="viz">
+    <div class="viz-title">DEMO · KV 容量计算器（改任意参数，实时出账）</div>
+    <div class="calcs">
+      <div class="row">
+        <label>n_layers<input id="kv-layers" type="number" value="40" min="1"></label>
+        <label>n_kv_heads<input id="kv-kvh" type="number" value="40" min="1"></label>
+        <label>d_head<input id="kv-dh" type="number" value="128" min="1"></label>
+        <label>bytes (fp16=2)<input id="kv-bytes" type="number" value="2" min="1" max="8"></label>
+        <label>序列长度 L<input id="kv-len" type="number" value="4096" min="1"></label>
+        <label>显存 GB<input id="kv-gpu" type="number" value="80" min="1"></label>
+        <label>权重+激活 GB<input id="kv-weights" type="number" value="28" min="0"></label>
+      </div>
+      <div class="out">
+        <div class="obox"><div class="k">单价（每 token）</div><div class="v" id="kv-out-per">—</div></div>
+        <div class="obox"><div class="k">单序列总量</div><div class="v" id="kv-out-seq">—</div></div>
+        <div class="obox"><div class="k">KV 可用池</div><div class="v" id="kv-out-pool">—</div></div>
+        <div class="obox"><div class="k">理论并发上限</div><div class="v" id="kv-out-n">—</div></div>
+      </div>
+      <div class="bars">
+        <div class="bar-row"><div class="bl">单序列占池比例</div><div class="bar-track"><div class="bar-fill" id="kv-bar-seq" style="background:#f778ba;width:0%"></div></div></div>
+        <div class="bar-row"><div class="bl">满并发时 KV 占池比例</div><div class="bar-track"><div class="bar-fill" id="kv-bar-n" style="background:#7ee787;width:0%"></div></div></div>
+      </div>
+    </div>
+    <p class="viz-note">默认值 = 本文算例（13B @ 4k → 16 路）。试试：kvh 40→8（GQA）、bytes 2→1（int8）、len 4096→128k，感受旋钮的威力。</p>
+  </div>
+
+  <h3><span class="sec-idx">5.1</span>部署现象对照表</h3>
+  <table>
+    <tr><th>现象</th><th>根因</th><th>对应本页概念</th></tr>
+    <tr><td>并发一高就 OOM，单跑没事</td><td class="bad">KV 随并发叠加，池被榨干</td><td>单价 × 并发（L1/L3）</td></tr>
+    <tr><td>长对话越聊越慢</td><td>注意力对全部 KV 扫描，计算也随 L 增长</td><td>O(L) 递增（L2）</td></tr>
+    <tr><td>换 GQA 模型并发翻 4 倍</td><td class="ok">kv_heads 因子 ÷4，单价直降</td><td>旋钮 1（L4）</td></tr>
+    <tr><td>吞吐远低于理论并发</td><td>碎片 + 预留浪费把池吃掉一大半</td><td>→ 下篇 <a href="pagedattention.html">PagedAttention</a></td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>权重是固定房租，KV Cache 是按 token 计费的水电费 —— 推理容量被它锁死（L1）</li>
+      <li>缓存 K/V 不缓存 Q：查询方只有当前行，被查方是全部历史 —— 用 O(L) 显存买掉 O(L²) 重算（L2）</li>
+      <li>单价 = 2·layers·kv_heads·d_head·bytes；总量 = 单价 × L × 并发（L3）</li>
+      <li>MHA vs GQA 是 4 倍分水岭：压缓存不压模型，Q 侧表达力全保留（L4）</li>
+      <li>所有压缩旋钮按因子相乘；碎片与复用问题交给下篇 PagedAttention（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>自回归 (autoregressive)</dt><dd>逐 token 生成，每步以全部历史为条件 —— KV 直线的来源。</dd>
+    <dt>MHA / MQA / GQA</dt><dd>多头注意力的 KV 头配置：每 Q 头独立 / 全共享 1 份 / 分组共享。KV 份 = kv_heads。</dd>
+    <dt>per-token 单价</dt><dd>2·n_layers·n_kv·d_head·b 字节。与序列长度无关，与并发无关。</dd>
+    <dt>prefix caching</dt><dd>跨请求复用相同前缀的 KV；多轮对话 / 共享 system prompt 场景大幅省显存。</dd>
+    <dt>KV 量化</dt><dd>把缓存的 fp16 K/V 压成 int8/int4 —— 只压缓存，不动权重。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">下一站：<a href="pagedattention.html">PagedAttention —— 这份账本怎么管才不碎</a>（三策略模拟器同台对比）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · KV Cache · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="pagedattention.html">下篇 PagedAttention →</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="kv-cache.js"></script>
+</body>
+</html>

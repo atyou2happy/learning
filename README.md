@@ -6,7 +6,8 @@
 
 ## 目录
 
-- [PagedAttention](topics/pagedattention.html) — LLM 推理 · 显存管理 · 三策略模拟器
+- [KV Cache](topics/kv-cache.html) — LLM 推理 · 显存账本 · 交互计算器
+- [PagedAttention](topics/pagedattention.html) — LLM 推理 · 显存管理 · 三策略模拟器（前置：KV Cache）
 
 ## 页面结构（五层）
 
