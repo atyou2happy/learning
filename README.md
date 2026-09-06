@@ -36,6 +36,7 @@
 - [Speculative Decoding](topics/speculative.html) — 推理加速 · 投机解码 · 猜-验证动画 + α 滑块 2-3x（前置：Sampling + KV Cache）
 - [MLA](topics/mla.html) — 推理显存 · 潜在注意力 · KV 压缩 57 倍 + 屠夫账本（前置：KV Cache + Attention）
 - [FFN 键值记忆](topics/ffn.html) — 架构深处 · 知识的实体基础 · 键值检索动画 + ROME 知识编辑模拟器（前置：Attention）
+- [浮点精度](topics/precision.html) — 数值地基 · fp32/bf16/fp8 比特账 · 精度放大镜 + 梯度生死簿 + TFLOPS 阶梯（前置：Quantization）
 
 ## 页面结构（五层）
 

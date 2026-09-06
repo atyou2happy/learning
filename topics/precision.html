@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>浮点精度 — 全站数字背后的单位层</title>
+<meta name="description" content="fp32/bf16/fp16/fp8 的比特账：符号+指数+尾数、精度放大镜、bf16 为什么赢了训练（梯度下溢）、E4M3 vs E5M2、精度档位与 TFLOPS 翻倍、DS-V3 FP8 训练账。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 单位</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 数轴</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 训练</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 推理</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 价签</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>precision</div>
+    <div class="topic-kicker">数值地基 · 全站数字的单位层</div>
+    <h1 class="topic-title">浮点精度：FP32 / BF16 / FP8 的比特账</h1>
+    <p class="topic-sub"><a href="kv-cache.html">KV Cache 页</a>的 0.5MB/token、<a href="quantization.html">Quantization 页</a>的 4bit 压缩、<a href="roofline.html">Roofline 页</a>的 989 TFLOPS —— 这些数字全都站在一个从未验明正身的常数上：<strong>一个参数占几个字节、一次乘法按什么精度算</strong>。这一页打开它：1 符号位 + 8 指数位 + 7 尾数位 = bf16 —— 训练界的不速之客，赢的原因是「砍精度、保范围」。<strong>0.1 在 bf16 里其实是 0.10009765625</strong>，而模型毫不在乎。</p>
+    <div class="topic-meta">
+      <span class="tag">精度放大镜</span>
+      <span class="tag">格式对比滑块</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="quantization.html" style="color:inherit">Quantization</a> · <a href="kv-cache.html" style="color:inherit">KV Cache</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">单位：那个「×2 字节」从哪来</h2></div>
+  <p class="level-goal">本层目标：把全站数字的单位审判一遍。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 五种格式的比特结构 + 全站单位对账</div>
+    <canvas id="bitsCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">浮点数 = <strong>符号位 + 指数位（范围）+ 尾数位（精度）</strong>。KV Cache 页的 0.5MB/token：2(K+V) × 32头 × 4096维 × <strong>2 字节(fp16)</strong> —— 那个 2 就是本页的主角。同一份缓存 int8 存 = 0.25MB、int4 = 0.125MB（Quantization 页四旋钮的来历）。8B 模型权重：fp16 16GB → int8 8GB → int4 4GB，<strong>每降一档，字节减半</strong> —— 显存、带宽、TFLOPS 全部跟着这个刻度走。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>同样 16 个比特，bf16 和 fp16 怎么分？</p>
+    <div class="options">
+      <button class="opt">完全相同的格式，不同叫法</button>
+      <button class="opt">bf16 尾数更多，fp16 指数更多</button>
+      <button class="opt">bf16 = 1+8+7（指数照抄 fp32，砍尾数）；fp16 = 1+5+10（尾数多，指数少）</button>
+    </div>
+    <div class="explain">一个拿比特买范围、一个拿比特买精度 —— 下层看完数轴你会知道为什么训练选前者。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">数轴：每个格式能表示哪些点</h2></div>
+  <p class="level-goal">本层目标：亲眼看见「格子」长什么样。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 精度放大镜（切格式看 1.0 附近的可表示点）</div>
+    <div style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap">
+      <button class="opt fmtBtn" data-f="0" style="border:1px solid var(--border)">fp32</button>
+      <button class="opt fmtBtn" data-f="1" style="border:1px solid var(--border)">fp16</button>
+      <button class="opt fmtBtn" data-f="2" style="border:1px solid var(--border)">bf16</button>
+      <button class="opt fmtBtn" data-f="3" style="border:1px solid var(--border)">fp8-E4M3</button>
+      <button class="opt fmtBtn" data-f="4" style="border:1px solid var(--border)">int8</button>
+    </div>
+    <canvas id="gridCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">1.0 附近的步长（node 实算）：fp32 = 1.2e-7 · fp16 = 9.8e-4 · <strong>bf16 = 0.0078</strong>（1.0 的下一个点是 1.0078125）· fp8-E4M3 = <strong>0.125</strong>。注意 int8 的格子<strong>均匀</strong>，浮点的格子<strong>越靠近 0 越密</strong> —— 对数刻度。0.1 存进 bf16 变成 0.10009765625（误差万分之一）—— 模型对这个量级的误差毫不在乎，因为它统计的不是某一个数。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>bf16 在 1.0 附近的格子比 fp16 稀疏 8 倍，为什么训练还敢用？</p>
+    <div class="options">
+      <button class="opt">训练数据本来就不精确</button>
+      <button class="opt">深度学习靠的是亿万次平均的统计信号，单点 1% 量级的舍入误差在梯度平均里被冲掉；真正致命的不是误差大小，是下一层的两种「直接丢数」</button>
+      <button class="opt">bf16 其实精度更高</button>
+    </div>
+    <div class="explain">丢精度的代价是噪声，丢范围的代价是死亡 —— 下一层看两种死亡。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">训练：bf16 为什么赢了 fp16</h2></div>
+  <p class="level-goal">本层目标：看懂两种「直接丢数」的死亡方式。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 梯度生死簿（点按钮切换格式）</div>
+    <div style="display:flex;gap:8px;margin:10px 0">
+      <button id="fmtSw" class="opt" style="border:1px solid var(--border)">切换 fp16 / bf16 →</button>
+    </div>
+    <canvas id="trainCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">典型小梯度 <strong>1e-8</strong>：fp16 最小正常数 6.1e-5 —— <strong>直接下溢归零，梯度永久丢失</strong>；bf16 最小正常数 1.2e-38 —— 活得好好的。上溢端：fp16 最大 65504，一层激活突然变大就 inf → NaN，loss 尖峰炸训练。bf16 与 fp32 共享 8 位指数，<strong>范围一个不丢、精度砍到 8 位</strong> —— 大数小数都死不了，只是粗糙。混合精度 = 主权重 fp32（累积精度）+ 前向/反向 bf16（速度），两边的好处全占。fp16 也救得活：loss scaling 先把 loss ×1024 再反传 —— 但 bf16 免去了这一步，2018 年后训练界几乎一边倒。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>「bf16 精度比 fp16 低却赢了训练」—— 关键洞察是？</p>
+    <div class="options">
+      <button class="opt">神经网络的敌人不是「不够精确」而是「超出范围」：下溢丢梯度、上溢出 NaN 都是结构性死亡；精度差只是噪声，会被统计平均吸收</button>
+      <button class="opt">bf16 计算速度更快</button>
+      <button class="opt">因为 TPU 厂商选了它</button>
+    </div>
+    <div class="explain">「宁可粗糙、不可死亡」—— 范围是底线，精度是奢侈品。B200 把这条推到 FP4 也是同一赌注。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 2 → 4</span><h2 class="level-title">推理：FP8 的两种格式与 int8 的格子</h2></div>
+  <p class="level-goal">本层目标：会选推理档位。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 同样 1 字节的两种存法：int8 vs FP8</div>
+    <canvas id="inferCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">int8：均匀格子，配 scale/zero-point 把权重区间线性映射（<a href="quantization.html">Quantization 页</a>讲过怎么算）；FP8-E4M3：对数格子，近 0 密、远处疏 —— <strong>权重分布尖峰在 0 附近，对数格子天然合身</strong>。E4M3（max 448）管前向，E5M2（范围大 57344）管梯度 —— 推理只需前者。KV Cache 同理可压：int8 = 半价、int4 = 四分之一价，代价是长上下文检索精度 —— 省字节的每一档都在和「格子够不够密」做交易。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>同样 1 字节，什么时候 FP8 打得过 int8？</p>
+    <div class="options">
+      <button class="opt">永远打不过，int8 是整数更稳定</button>
+      <button class="opt">权重全部为正的时候</button>
+      <button class="opt">数值分布尖峰在 0、长尾拉得很远时（典型 LLM 权重/激活）—— 对数格子把密度花在小数区，均匀格子在长尾上浪费格子</button>
+    </div>
+    <div class="explain">int8 的 scale 是全局折中：尖峰和长尾只能顾一头。FP8 的指数位让格子自己伸缩 —— 分布形状决定胜负。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">价签：精度档位就是价格档位</h2></div>
+  <p class="level-goal">本层目标：会读硬件表和 API 报价单的精度档。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 精度阶梯：每降一档，算力翻倍、显存减半</div>
+    <canvas id="ladderCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">H100 dense：<strong>fp32 67 → bf16 989 → fp8 1979 TFLOPS</strong>；B200 再加 fp4 = 9 PFLOPS —— 硬件按比特宽度定制乘法器，<strong>比特减半、吞吐翻倍</strong>。DeepSeek-V3 用原生 FP8 训练：激活显存对 bf16 减半、算力翻倍 —— 558 万美元训练账（Pretraining 页）里有它的功劳。这就是 <a href="roofline.html">Roofline 页</a>的天花板随精度移动、<a href="quantization.html">Quantization 页</a>的 PPL 代价表、<a href="moe.html">MoE 页</a>FP8 提及的共同底层：<strong>精度是一根刻度尺，全站的 GB 和 TFLOPS 都印着它的刻度</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>为什么每降一档精度，TFLOPS 就翻倍？</p>
+    <div class="options">
+      <button class="opt">低精度芯片更便宜</button>
+      <button class="opt">tensor core 的乘法器/累加器按比特宽度造：16bit 乘一次的硅面积能并行做两个 8bit 乘法 —— 比特减半，单位面积算力翻倍，显存带宽占用同时减半</button>
+      <button class="opt">厂商营销数字</button>
+    </div>
+    <div class="explain">物理账：同样一颗芯片、同样一度电，精度档位决定它每小时能做多少乘法 —— 这就是 B200 押注 FP4 的原因。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>浮点 = 符号 + 指数(范围) + 尾数(精度)；bf16=1+8+7，fp16=1+5+10（L1）</li>
+      <li>全站数字的单位来源：fp16 2字节 → KV 0.5MB/token；每降一档字节减半（L1）</li>
+      <li>bf16 赢训练的原理：范围保命（grad 1e-8 在 fp16 下溢归零）、精度只是噪声（L3）</li>
+      <li>int8 均匀格子 vs FP8 对数格子 —— 分布形状决定 1 字节存哪种（L4）</li>
+      <li>精度档 = 价格档：比特减半 → TFLOPS 翻倍 + 显存减半（H100 67→989→1979）（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>fp32 / 单精度</dt><dd>1+8+23 = 4 字节 —— 传统科学计算默认，训练中只做主权重与累加。</dd>
+    <dt>bf16 (bfloat16)</dt><dd>1+8+7 = 2 字节 —— 截短的 fp32：指数原封不动、尾数砍到 8 位。Google 2018 为 TPU 引入，训练事实标准。</dd>
+    <dt>fp16 (half)</dt><dd>1+5+10 = 2 字节 —— 范围 ±65504、minNormal 6.1e-5，推理档位、早期混合精度主力。</dd>
+    <dt>FP8-E4M3 / E5M2</dt><dd>1 字节浮点两种分法：E4M3 精度高范围小（前向/权重），E5M2 范围大（梯度）。OCP 标准，Hopper 起原生支持。</dd>
+    <dt>minNormal (最小正常数)</dt><dd>规格化数的最小值 —— 比它小就落入 subnormal/下溢区，fp16 的 6.1e-5 是梯度杀手。</dd>
+    <dt>loss scaling</dt><dd>fp16 训练的救命术：loss 乘大系数把梯度抬进表示范围，更新前再除回。</dd>
+    <dt>混合精度 (mixed precision)</dt><dd>fp32 主权重 + 低精度计算的分工 —— 累积精度与速度兼得。</dd>
+    <dt>下溢 / 上溢 (underflow / overflow)</dt><dd>超出最小/最大可表示数 —— 前者悄悄归零，后者 inf→NaN 炸训练。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="quantization.html">Quantization</a>（怎么压的直接续集）· <a href="roofline.html">Roofline</a>（TFLOPS 天花板的移动）· <a href="kv-cache.html">KV Cache</a>（0.5MB 单位来源）· <a href="moe.html">MoE</a>（FP8 训练实践）· <a href="pretraining.html">Pretraining</a>（558 万美元训练账）· <a href="mla.html">MLA</a>（3.9MB/token 的 ×2 字节）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · precision · 图解版 · 全站数字的单位层</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="precision.js"></script>
+</body>
+</html>
