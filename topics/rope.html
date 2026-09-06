@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoPE — 位置是一種旋轉</title>
+<meta name="description" content="RoPE 旋转位置编码：Transformer 是集合不是序列、旋转星图（高频飞转低频慢挪）、相对位置的共轭相消、128k 外推事故与 PI/NTK/YaRN 续命、长上下文四页拼图与读发布会的姿势。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 无序</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 旋转</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 相对</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 外推</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 读发布</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>RoPE</div>
+    <div class="topic-kicker">模型架构 · 位置编码 · attention 系收官</div>
+    <h1 class="topic-title">RoPE 旋转位置编码</h1>
+    <p class="topic-sub">Transformer 本身是集合不是序列 —— 打乱词序，attention 输出不变（「猫追老鼠」=「老鼠追猫」的袋子）。RoPE 的答案优雅到离谱：<strong>把位置变成旋转角</strong>，每对维度一个频率，高频管词序、低频管整本书。而 128k 长上下文的真相是场事故与续命：训练 4k 的模型为什么能在 128k 上活下来？拖滑块看角度被压回训练区。</p>
+    <div class="topic-meta">
+      <span class="tag">旋转星图</span>
+      <span class="tag">内插滑块</span>
+      <span class="tag">约 9 分钟</span>
+      <span class="tag">前置：<a href="attention.html" style="color:inherit">Attention</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">无序：集合不是序列</h2></div>
+  <p class="level-goal">本层目标：认识到 Transformer 天生「失序」，位置必须注入。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 「猫追老鼠」=「老鼠追猫」？</div>
+    <canvas id="setCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note"><a href="attention.html">Attention 页</a>的核心公式 softmax(QKᵀ/√d)V 对输入顺序完全不敏感 —— 交换两个 token 的位置，各自的新输出相同（attention 只看内容相似度）。位置信息全靠<strong>从外面注入</strong>：正弦编码（2017）→ 可学习绝对位置（BERT/GPT-2）→ RoPE 旋转（2020，现代主流）。RoPE 胜出三理由：<strong>相对性 + 零新参数 + 数学优雅</strong>（旋转保内积）。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么「绝对位置编码」（第 1 位、第 2 位…）不如相对位置符合语言本质？</p>
+    <div class="options">
+      <button class="opt">语言的关键信息多是「隔多远」而非「在第几位」—— 「它」指向上文第 3 个词，换成 1000 词的文档里第 503 个词，机制应当一样；绝对编码让同样的相对关系在不同偏移处长得完全不同</button>
+      <button class="opt">绝对编码太贵</button>
+      <button class="opt">绝对编码不能训练</button>
+    </div>
+    <div class="explain">平移不变性：句子整体挪位，内部相对关系不变，表示也不应变 —— 旋转天然提供这个性质。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">旋转：每对维度一个频率</h2></div>
+  <p class="level-goal">本层目标：玩转旋转星图，记住频率的 8 个数量级。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 旋转星图（拖位置 m 滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="posSlider" min="0" max="5" step="1" value="2" style="flex:1">
+      <span id="posLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:80px">m = 12</span>
+    </div>
+    <canvas id="rotCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">θᵢ = 10000^(−2i/d)：维度对 0 的 θ=1.0（每 6 个位置转一圈 —— 管「相邻词的顺序」），维度对 31 的 θ=0.011（上千个位置才转一圈 —— 管「段落级远距离」）。<strong>64 个频率覆盖 8 个数量级的波长</strong>：从词序到整本书，每根维度各管一段尺度。拖 m 看高频疯转、低频纹丝不动 —— 这就是「位置」在模型眼里的样子。</p>
+  </div>
+
+  <div class="formula">
+    θᵢ = base^(−2i/d) （i = 0 … d/2−1，base 典型 10000）
+    <span class="ann">频率几何级数分布 —— 像把一把尺子切成从毫米到公里的所有刻度；base 越大低频越多（长上下文友好），2026 新模型已提到 500k~5M</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">相对：共轭相消的魔法</h2></div>
+  <p class="level-goal">本层目标：理解旋转如何「免费」获得相对性。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 夹角才是信息</div>
+    <canvas id="relCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">q 转了 m·θ、k 转了 n·θ —— 点积时复数共轭相乘，e^{imθ}·e^{−inθ} = e^{i(m−n)θ}：<strong>绝对角度消掉，只剩相对夹角</strong>。整句平移（m、n 同加常数）夹角不变，attention 分数不变 —— 平移不变性白送。这就是 RoPE 名字里的 R：不加偏置、不学参数，仅靠旋转的几何性质就把「相对位置」写进了内积。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">外推：128k 事故与三种续命</h2></div>
+  <p class="level-goal">本层目标：看懂外推崩溃的原因与 PI/NTK/YaRN 的修法。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 事故现场与内插（拖插值滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="piSlider" min="0" max="5" step="1" value="0" style="flex:1">
+      <span id="piLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:90px">未插值</span>
+    </div>
+    <canvas id="extCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">训练 4k：最高频维已转了几千圈（角度信息充分），最低频维只转过 47 rad —— <strong>95% 的圈根本没见过</strong>。直接外推 128k：角度分布完全跑出训练区 → 崩。修法三连：PI 线性内插（全部 θ/s，粗暴但高频受损）、NTK-aware（只压低频保高频 —— 感知波长）、YaRN（NTK + 注意力温度 + 分段，免微调近似）。拖滑块到 s=32 看角度被压回绿区。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>PI（全部频率除以 s）为什么需要微调恢复？</p>
+    <div class="options">
+      <button class="opt">因为除法引入了噪声</button>
+      <button class="opt">高频维度原本负责「相邻词序」，被压后相邻位置的角度差变得过小 —— 模型分不清「猫追老鼠」和「老鼠追猫」级别的局部顺序，需要少量数据重新校准</button>
+      <button class="opt">因为滑块拖太快</button>
+    </div>
+    <div class="explain">NTK/YaRN 的动机正是保护高频 —— 词序分辨率是语言的底线，长距离可以模糊，隔壁词不能认错。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">读发布：百万 token 的工程杂技</h2></div>
+  <p class="level-goal">本层目标：建立对长上下文宣传语的四问反射。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 长上下文的四页拼图</div>
+    <canvas id="billCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">RoPE 只解决「位置能不能表示」；显存（<a href="kv-cache.html">KV Cache 64GB</a>）、计算（<a href="flash-attention.html">N² 分数</a>）、调度（<a href="continuous-batching.html">连续批处理</a>）、装不下（<a href="pagedattention.html">分页</a>/<a href="airllm.html">流式</a>）各有各的账 —— <strong>长上下文是四页拼图，本页是第一块</strong>。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 四问清单</div>
+    <canvas id="readCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">训练到多长（YaRN 外推 ≠ 从头训）？大海捞针测过没（插针 ≠ 推理）？价目表（1M prefill = 128k 的 64 倍账单）？真实用法（<a href="rag.html">RAG</a> 前 8k 挡 90% 的活）？—— 问完四句，宣传语的去水含量自现。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>Transformer 是集合不是序列 —— 位置必须从外面注入（L1）</li>
+      <li>RoPE = 位置变旋转角：64 个频率覆盖 8 个数量级波长（L2）</li>
+      <li>共轭相消：点积只剩相对夹角 —— 平移不变性白送（L3）</li>
+      <li>外推 = 角度出圈；PI 全压、NTK 保高频、YaRN 加温度（L4）</li>
+      <li>长上下文 = 四页拼图；读发布会先问四句（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>RoPE (旋转位置编码)</dt><dd>把位置 m 编码为每对维度的旋转角 m·θᵢ —— 相对、零参数、保内积。</dd>
+    <dt>θᵢ / base</dt><dd>维度对 i 的角频率 = base^(−2i/d)；base 控制低频多寡（长上下文友好度）。</dd>
+    <dt>外推 (extrapolation)</dt><dd>推理长度超过训练长度 —— 旋转角跑出训练分布导致崩溃。</dd>
+    <dt>PI (位置内插)</dt><dd>所有频率除以缩放因子 s，把角度线性压回训练区 —— 高频受损需微调。</dd>
+    <dt>NTK-aware / YaRN</dt><dd>保高频只压低频的插值法；YaRN 再加注意力温度与分段 —— 免微调主流。</dd>
+    <dt>大海捞针 (NIAH)</dt><dd>长上下文的经典测试 —— 在长文本里埋一句关键信息测检索，但不等于全文推理能力。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="attention.html">Attention</a>（位置的宿主）· <a href="kv-cache.html">KV Cache</a> · <a href="flash-attention.html">FlashAttention</a> · <a href="mamba.html">Mamba</a>（不需要位置编码的另类记忆）· <a href="rag.html">RAG</a>（长上下文的替代路线）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · RoPE · 图解版 · attention 系收官之作</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="rope.js"></script>
+</body>
+</html>
