@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roofline — 算力与带宽的物理学</title>
+<meta name="description" content="Roofline 模型：一条曲线解释全站性能技巧。算力墙与带宽墙、屋脊点 153 flops/byte、decode 效率 1%、batch/量化/FlashAttention/AirLLM/MoE 全部钉上同一条曲线。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 两台发动机</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 屋顶线</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 全站对号</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 四卡性格</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 决策树</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Roofline</div>
+    <div class="topic-kicker">系统底层 · 性能的物理学</div>
+    <h1 class="topic-title">Roofline 屋顶线</h1>
+    <p class="topic-sub">FlashAttention 为什么重算反而快？decode 为什么慢、batch 为什么救？量化为什么加速？AirLLM 为什么卡在 20 秒/token？—— 这些问题的答案是同一句话：<strong>GPU 每一刻只被一堵墙卡住（算力墙或带宽墙），全站的性能技巧都是在墙上移动那个点</strong>。一条曲线，收拢全站的物理直觉。</p>
+    <div class="topic-meta">
+      <span class="tag">intensity 滑块</span>
+      <span class="tag">全站案例钉图</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="flash-attention.html" style="color:inherit">FlashAttention</a> · <a href="quantization.html" style="color:inherit">Quantization</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">两台发动机：算力 vs 带宽</h2></div>
+  <p class="level-goal">本层目标：建立「双资源」视角，认识算术强度。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 312 TFLOPS vs 2.0 TB/s</div>
+    <canvas id="engineCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">A100 上有两台发动机：算力（每秒 312 万亿次浮点）和带宽（每秒 2TB 内存搬运）。任何 kernel 的实际速度 = <strong>两者中较慢的那个</strong>。哪个更慢？只取决于你的计算「每读 1 字节做多少次运算」—— 算术强度 AI = flops/bytes。这一个数字决定你站在哪堵墙下。</p>
+  </div>
+
+  <div class="formula">
+    attainable = min( 峰值算力 , 带宽 × AI )
+    <span class="ann">左边赢 → 带宽墙（芯片在等数据）；右边赢 → 算力墙（数据在等芯片）。没有第三种情况</span>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">屋顶线：一条曲线看懂所有 kernel</h2></div>
+  <p class="level-goal">本层目标：拖滑块感受「坡」与「顶」，记住屋脊点。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 屋顶线（拖 intensity 滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="aiSlider" min="0" max="11" step="1" value="2" style="flex:1">
+      <span id="aiLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:110px">1 flops/byte</span>
+    </div>
+    <canvas id="roofCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">左坡（带宽墙）：attainable = 2TB/s × AI，强度翻倍速度翻倍；右顶（算力墙）：312T 满血封顶，强度再高也白搭。拐点 = <strong>屋脊点 153 flops/byte</strong>（312T ÷ 2.04TB/s）。把点拖到最左（AI=1）： attainable 只有 2 TFLOPS —— <strong>1% 的效率，芯片 99% 时间在等数据</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>你的 kernel AI=8，实测 16 TFLOPS。买一张算力翻倍的新卡（带宽不变），快多少？</p>
+    <div class="options">
+      <button class="opt">快 2 倍</button>
+      <button class="opt">快 1.4 倍</button>
+      <button class="opt">一点不快 —— AI=8 在带宽墙上，瓶颈是搬数据的速度；算力翻倍只是把「够不到的顶」抬得更高</button>
+    </div>
+    <div class="explain">带宽墙上加算力 = 高速公路旁多修一条更宽的（没人走的）车道。诊断墙，是所有性能优化的第一步。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">对号：全站七案例同一条曲线</h2></div>
+  <p class="level-goal">本层目标：把散落全站的直觉钉到一张图上。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 案例钉图</div>
+    <canvas id="pinsCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note"><strong>decode B=1（红，AI=1，效率 1%）</strong>：每个权重从显存读一次只做 2 次乘加 —— <a href="kv-cache.html">KV Cache 页</a>的"decode 是带宽瓶颈"的几何位置。<strong>batch 64（橙，AI=64，42%）</strong>：同一份权重喂 64 个 token，flops×64 bytes 不变 —— <a href="continuous-batching.html">连续批处理</a>的全部意义。<strong>GEMM 4096³（蓝，AI=1365，满血）</strong>：prefill/训练的矩阵乘，tensor core 王道。<strong>int4 权重（紫，AI=4）</strong>：<a href="quantization.html">量化页</a>加速的几何解释 —— bytes÷4 = 强度×4，坡上右滑。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 优化 = 移动这个点</div>
+    <canvas id="fixCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">五张全站票根：<a href="continuous-batching.html">连续批处理</a>（flops×64 拉强度）、<a href="quantization.html">量化</a>（bytes÷4）、<a href="flash-attention.html">FlashAttention</a>（不物化 N² 矩阵 = 砍 IO 分母）、<a href="airllm.html">AirLLM</a>（接受带宽墙的极端：显存换时间）、<a href="moe.html">MoE</a>（不移动点，少干活：flops 与 bytes 同降）。—— <strong>性能优化没有魔法，只有坡上滑点和墙下换墙</strong>。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">四卡性格：屋脊点决定脾气</h2></div>
+  <p class="level-goal">本层目标：看懂数据中心卡与消费卡的分野。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 四卡屋脊点对比</div>
+    <canvas id="gpuCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">屋脊点 = 性格：H100 高达 296（右墙宽，算力型工作受益），RTX 5090 只有 117 —— <strong>消费卡带宽相对更抠，更早撞带宽墙，跑 decode（左墙工作）更吃亏</strong>。这就是"4090 打游戏是神卡、跑服务是苦力"的物理底色。选卡先问自己常在墙的哪一侧。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：判墙决策树</h2></div>
+  <p class="level-goal">本层目标：形成「先诊断墙、再选对策」的工程反射。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 两墙对策表</div>
+    <canvas id="treeCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">profile 看 SM 利用率 vs DRAM 利用率，谁满谁就是墙。左墙对策全是「省字节/凑 batch」（cb·quant·pagedattn·airllm·fa），右墙对策全是「榨算力」（tensor core·tiling·精度·<a href="moe.html">MoE</a>）。同一张 A100：训练在右墙吃满 tensor core，服务 decode 在左墙打 42% 折扣 —— <strong>两份工作，两种性格，一套物理学</strong>。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>GPU 只有两堵墙：算力墙与带宽墙 —— attainable = min(峰值算力， 带宽×AI)（L1）</li>
+      <li>屋脊点 153 flops/byte：左坡速度∝强度，右顶满血封顶（L2）</li>
+      <li>decode B=1 的 AI=1（1% 效率）；batch 64 → AI=64（42%）；GEMM 1365 满血（L3）</li>
+      <li>全站技巧 = 移点：量化 bytes↓、batch flops↑、FA 砍 IO、MoE 少干活（L3）</li>
+      <li>屋脊点是卡的性格：5090=117 vs H100=296 —— 消费卡左墙吃亏（L4/L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>arithmetic intensity (AI)</dt><dd>算术强度 —— 每读一字节做多少次浮点运算，flops/bytes。</dd>
+    <dt>roofline</dt><dd>屋顶线 —— attainable 性能 = min(算力平顶， 带宽斜坡) 的 log-log 折线。</dd>
+    <dt>ridge point</dt><dd>屋脊点 —— 峰值算力÷带宽；越低越早撞带宽墙。</dd>
+    <dt>memory-bound / compute-bound</dt><dd>带宽墙 / 算力墙 —— kernel 在等数据还是在等计算。</dd>
+    <dt>prefill vs decode</dt><dd>prefill 是 GEMM 式（右墙），decode 是逐 token（左墙 AI=1）—— <a href="kv-cache.html">KV Cache</a>两种阶段的物理性格。</dd>
+    <dt>SM / DRAM 利用率</dt><dd>profile 双指标 —— 谁先满，谁就是墙。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="flash-attention.html">FlashAttention</a> · <a href="quantization.html">Quantization</a> · <a href="continuous-batching.html">Continuous Batching</a> · <a href="moe.html">MoE</a> · <a href="airllm.html">AirLLM</a> · <a href="kv-cache.html">KV Cache</a>（六页性能技巧在这页合流）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Roofline · 图解版 · A100 口径 312T/2.04TB/s</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="roofline.js"></script>
+</body>
+</html>

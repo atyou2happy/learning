@@ -28,6 +28,7 @@
 - [Self-Attention / QKV](topics/attention.html) — LLM 基础 · 枢纽概念 · 指代热力图 + √d 开关（前置：Tokenizer）
 - [AirLLM](topics/airllm.html) — LLM 部署 · 逐层流式加载 · 4GB 跑 70B（前置：Quantization）
 - [Mamba / SSM](topics/mamba.html) — 模型架构 · 状态空间模型 · 恒定状态 8000 倍差距 + hybrid 现状（前置：KV Cache）
+- [Roofline](topics/roofline.html) — 系统底层 · 性能物理学 · 全站技巧一条曲线收拢（前置：FlashAttention）
 
 ## 页面结构（五层）
 
