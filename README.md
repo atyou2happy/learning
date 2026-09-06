@@ -20,6 +20,7 @@
 - [RLHF / DPO](topics/rlhf.html) — LLM 训练 · 对齐 · 三步流水线动画 + Goodhart 曲线（前置：Reasoning）
 - [RAG / Embedding](topics/rag.html) — LLM 应用 · 检索增强 · 向量空间拖拽 + 检索流水线（前置：Tokenizer）
 - [Agent / Function Calling](topics/agent.html) — LLM 应用 · 智能体 · ReAct 循环动画 + MCP 一座桥（前置：RAG）
+- [Pretraining / Scaling Laws](topics/pretraining.html) — LLM 训练 · 第一部曲 · 幂律曲线 + Chinchilla 审计（前置：Tokenizer）
 
 ## 页面结构（五层）
 

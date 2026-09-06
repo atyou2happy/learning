@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pretraining / Scaling Laws — 猜词游戏烧出智能</title>
+<meta name="description" content="预训练与缩放定律：压缩即智能、loss 幂律、Chinchilla 20 tok/param、成本演进（GPT-4 $100M vs DS-V3 $5.58M）、能力涌现、数据配比。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 猜词</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 幂律</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ Chinchilla</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 涌现</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 配比</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Pretraining</div>
+    <div class="topic-kicker">LLM 训练 · 第一部曲</div>
+    <h1 class="topic-title">Pretraining / Scaling Laws</h1>
+    <p class="topic-sub">任务只有一个：猜下一个词。但要猜得准，你必须懂诗词、代码、天文、人情 —— 这就是「压缩即智能」。2018 年没人觉得这任务重要；2020 年 Kaplan 找到 loss 随规模的平滑幂律，2022 年 Chinchilla 证明 GPT-3「训大了没训够」—— 这两条直线是大模型军备竞赛的全部理论依据。</p>
+    <div class="topic-meta">
+      <span class="tag">幂律曲线</span>
+      <span class="tag">Chinchilla 审计</span>
+      <span class="tag">约 12 分钟</span>
+      <span class="tag">前置：<a href="tokenizer.html" style="color:inherit">Tokenizer</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">猜词游戏：为什么这么强的任务</h2></div>
+  <p class="level-goal">本层目标：理解「下一词预测 = 压缩 = 学世界规律」的三位一体。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 四种「下一个词」</div>
+    <canvas id="gameCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">信息论视角：压缩率越高 = 对规律的捕捉越深。把整本物理课本压到最小，你必须「知道」物理。<strong>下一词预测是无监督学习的完美伪装</strong> —— 不需要人工标注，语料本身就是无限题目（每个位置都是一道题，<a href="tokenizer.html">Tokenizer 页</a>的 token 序列）。GPT 的 loss 降一分，等于对世界的模型准一分。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>「预测下一词」为什么比「情感分类」之类的监督任务上限高得多？</p>
+    <div class="options">
+      <button class="opt">因为用的数据更多而已</button>
+      <button class="opt">监督任务只学一个窄标签；猜词要求建模语料全部规律（语法/事实/推理/风格），且题目随语料无限生成、零标注成本</button>
+      <button class="opt">因为损失函数更好</button>
+    </div>
+    <div class="explain">监督学习是人类划重点，预训练是让模型自己发现重点 —— 10^13 token 的语料里每一段都是免费教材。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">幂律：可预测的魔法直线</h2></div>
+  <p class="level-goal">本层目标：看懂 loss-参数量幂律，以及它为什么让巨头敢押注千亿参数。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · L(N) 幂律曲线（Chinchilla 口径）</div>
+    <canvas id="scalingCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">loss = 1.69 + 406·N<sup>−0.34</sup> —— 在 log-log 图上是近似直线，且<strong>跨模型规模稳定成立</strong>。这意味着：用 1e8~1e9 的小模型训一训，就能<strong>外推</strong>出 1e12 大模型的表现 —— 花百万美元做实验，预测十亿美元的结局。2020 年之后所有巨头的预算案背后都是这条线。渐近线 1.69 是语料熵的下界：再大的模型也猜不出真正的随机。</p>
+  </div>
+
+  <div class="formula">
+    L(N) = L_∞ + (N_c/N)^0.34 · 同型: L(D), L(C) 都是幂律 · C = 6ND
+    <span class="ann">C=6ND 是算力口径：每个参数在每 token 上前向+反向约 6 次乘加 —— 预训练算力账的唯一公式</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">Chinchilla：训大了 vs 训够了</h2></div>
+  <p class="level-goal">本层目标：记住 20 tok/param 基准和「推理时代过训」的转向。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · tok/param 审计：四代模型的配比</div>
+    <canvas id="ratioCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">2022 年 DeepMind 的 Chinchilla 用 400+ 次实验回答「给定算力，参数和数据怎么配」：<strong>~20 token/参数</strong>。GPT-3 每 param 只喂 1.7 token —— 175B 的大身体吃了顿快餐；同算力的 Chinchilla 70B（20 tok/param）反超它 —— 「训大了」输给「训够了」。但故事没完：<strong>Llama-3 反向过训 10 倍</strong>（214 tok/param）—— 因为部署时代的账变了：小模型多训，推理成本省一辈子（<a href="reasoning.html">Reasoning 页</a>的服务视角）。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 训练成本演进：从 $50k 到 $100M 再到 $5.58M</div>
+    <canvas id="costCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">GPT-4 传闻 $100M+ vs DeepSeek-V3 $5.58M —— 参数还多 67%。效率革命的三大件恰好都在本知识库：<a href="quantization.html">FP8 训练（量化页）</a> + <a href="moe.html">MoE 5.5% 激活（MoE 页）</a> + <a href="flash-attention.html">FlashAttention（IO 优化页）</a>。Scaling Law 没失效 —— <strong>同一条幂律线上，每 FLOP 的价钱被打下来了</strong>。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">涌现：突然会了？</h2></div>
+  <p class="level-goal">本层目标：理解涌现现象与它的争议 —— 别急着当玄学。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 平滑提升 vs 突然会了</div>
+    <canvas id="emergeCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">多位数乘法、代码补全等任务在某个规模前接近 0%，过阈值后陡升 —— 「量变引起质变」。但 2022 年 Schaeffer 等人提出异议：<strong>突跳可能是离散度量的幻觉</strong> —— 「答对才算分」的任务里，内部能力其实在平滑增长，只是你的尺子只有 0 和 1。换成连续度量（对数似然），很多「涌现」变回平滑曲线。真相大概率介于两者之间：度量放大了某些真实的非线性。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>「模型在 62B 突然涌现了多位数乘法」—— 更谨慎的说法是？</p>
+    <div class="options">
+      <button class="opt">涌现是玄学，不存在</button>
+      <button class="opt">涌现绝对真实</button>
+      <button class="opt">「完全答对率」这一离散度量在 62B 附近穿越了阈值；底层能力可能早已平滑增长 —— 结论依赖度量选择</button>
+    </div>
+    <div class="explain">这也是 Benchmark 的通用陷阱：换个评分方式，同一批模型能讲出完全不同的故事。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：数据配比与三部曲归位</h2></div>
+  <p class="level-goal">本层目标：记住配比为什么长这样，以及预训练在三部曲里的位置。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 预训练数据配比（现代典型）</div>
+    <canvas id="mixCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">消融实验反复证明：<strong>掺 20% 代码显著提升推理</strong> —— 代码的严格结构（if/for/缩进/调用链）教会模型「一步一步想」，这正是 <a href="reasoning.html">Reasoning 页</a>思考链的燃料。数学同理。数据质量同样是战场：phi 系列用「教科书级」精选数据，以 1/10 的量逼近全量训练 —— 「喂得对」有时胜过「喂得多」。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>下一词预测 = 压缩 = 学世界规律 —— 无监督的完美伪装（L1）</li>
+      <li>loss 幂律平滑可外推 —— 小模型预测大模型，军备竞赛的理论依据（L2）</li>
+      <li>Chinchilla 20 tok/param：GPT-3 训不足 11x；推理时代反向过训 10x（L3）</li>
+      <li>涌现的突跳部分是离散度量的幻觉 —— 换尺子，曲线变平滑（L4）</li>
+      <li>C=6ND 是算力总账；代码/数学是推理的燃料；DS-V3 用三大件把每 FLOP 打到 1/20（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>next-token prediction</dt><dd>预训练目标：给定前文，预测下一个 token 的分布 —— 交叉熵损失。</dd>
+    <dt>Scaling Laws</dt><dd>loss 随参数/数据/算力幂律下降的经验规律（Kaplan 2020, Chinchilla 2022）。</dd>
+    <dt>Chinchilla optimal</dt><dd>给定算力的最优配比 ~20 token/参数 —— 训练效率的基准点。</dd>
+    <dt>C = 6ND</dt><dd>预训练算力公式：参数量 × token 数 × 6（前向 2 + 反向 4）。</dd>
+    <dt>涌现 (emergence)</dt><dd>规模过阈值后某能力陡升的现象 —— 是否真实取决于度量方式。</dd>
+    <dt>过训 (overtraining)</dt><dd>超出 Chinchilla 配比继续训 —— 推理时代为省部署成本的理性选择。</dd>
+    <dt>token budget</dt><dd>数据量的度量单位 —— 全站统一的 token 口径（Tokenizer 页）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">训练三部曲至此完整：<a href="pretraining.html">预训练（本页）</a> → SFT/格式 → <a href="rlhf.html">RLHF/DPO（对齐）</a>；引擎是 <a href="flash-attention.html">FlashAttention</a>，架构是 <a href="moe.html">MoE</a>，成本靠 <a href="quantization.html">FP8/量化</a>，产物经 <a href="reasoning.html">RL（推理策略）</a>放大。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Pretraining · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="pretraining.js"></script>
+</body>
+</html>
