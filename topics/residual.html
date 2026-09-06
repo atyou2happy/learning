@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>残差流 — 模型的主干道</title>
+<meta name="description" content="残差流：Transformer 其实是一根 4096 维总线。望远镜求和、logit lens 逐层透视、子空间多车道协议、KV Cache 是总线的历史快照 —— Attention 路由 / FFN 记忆 / 残差流主干道，架构三部曲终章。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 主干道</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 望远镜</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 透视</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 并发</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 总账</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>residual</div>
+    <div class="topic-kicker">架构三部曲 · 终章：主干道</div>
+    <h1 class="topic-title">残差流：模型的主干道</h1>
+    <p class="topic-sub"><a href="attention.html">Attention 页</a>说「输出写回残差流」，<a href="ffn.html">FFN 页</a>说了四遍「记忆写入残差流」，<a href="kv-cache.html">KV Cache 页</a>存的 K/V 是它的历史切片 —— 全站引用最多的角色却从未露面。Anthropic 的 Transformer Circuits 框架给它正名：<strong>残差流不是辅助连接，它就是模型的本体</strong> —— 一根 4096 维的总线，32 个站点（层）各自往里<strong>加</strong>增量，谁都不覆盖谁。为什么是加法？因为这是 100 层网络能训得动的物理原因。</p>
+    <div class="topic-meta">
+      <span class="tag">总线动画</span>
+      <span class="tag">logit lens 逐层透视</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="attention.html" style="color:inherit">Attention</a> · <a href="ffn.html" style="color:inherit">FFN</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">主干道：一根 4096 维的总线</h2></div>
+  <p class="level-goal">本层目标：把 Transformer 重画成「总线 + 站点」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 词嵌入进站，32 站各加增量，顶端读出</div>
+    <canvas id="busCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">每个 token 从词嵌入进站（4096 维向量），经过 32 个站点：每站 Attention 先搬信息、FFN 再写记忆，两笔都是<strong>加</strong>到总线上（h ← h + attn(h) + ffn(h)），绝不覆盖。到顶端，lm_head（4096×128256 的读出矩阵）把总线状态翻译成下一个词的概率。传统画法把层画成「串联的盒子」—— 那是错觉：<strong>盒子们其实并联在同一根总线上，每层只是又一个写入者</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>「层」的正确心智模型是？</p>
+    <div class="options">
+      <button class="opt">流水线：每层处理完交给下一层，像工厂传送带</button>
+      <button class="opt">并联写入者：32 个层共享同一根残差总线，各自往里加增量，顶端一次性读出</button>
+      <button class="opt">树状结构：信息逐层分叉汇总</button>
+    </div>
+    <div class="explain">传送带模型解释不了残差连接 —— 并联总线模型下，残差不是技巧，是定义。下一层看「为什么必须是加法」。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">望远镜：h_L = x + Σfᵢ(x)</h2></div>
+  <p class="level-goal">本层目标：看懂加法是「能训深」的物理原因。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 望远镜求和 vs 逐层覆写（node 实测 8 维玩具）</div>
+    <canvas id="teleCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">把求和展开：<strong>h_L = x + f₁(x) + f₂(x) + … + f_L(x)</strong> —— 望远镜级数。node 实测（32 层随机增量）：顶层向量与原始嵌入的余弦仍有 <strong>0.49</strong>、x₀ 方向投影系数 <strong>0.77</strong> —— 原始词嵌入一路活到最后；对照组去掉残差（每层整写），32 层后余弦掉到 <strong>−0.27</strong> —— 信号被磨平。<strong>加法的两重红利</strong>：①每层只需学增量（增量≈0 也无害，层可以「闲着」）；②反向传播时梯度沿加法直通第 1 层（∂h_L/∂x = I + …），深层网络因此能训得动 —— 2015 年 ResNet 论文的全部要点，Transformer 生而继承。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么说「没有残差流，100 层的网络根本训不动」？</p>
+    <div class="options">
+      <button class="opt">因为计算量太大</button>
+      <button class="opt">因为显存装不下</button>
+      <button class="opt">逐层覆写让初始信号指数衰减磨平（实测 cos→−0.27），且梯度经过 100 次连乘同样消失；加法给信号和梯度各留了一条直通路</button>
+    </div>
+    <div class="explain">前向信号死 + 反向梯度死，双杀。残差流一根总线同时解决两个方向的「通航权」。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">透视：logit lens 逐层读数</h2></div>
+  <p class="level-goal">本层目标：亲眼看到「事实在中间层成形」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · logit lens：把 lm_head 提前挂到每层顶端（点按钮逐层推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="llBtn" class="opt" style="border:1px solid var(--border)">下一层 →</button>
+      <button id="llReset" class="opt" style="border:1px solid var(--border)">重置</button>
+    </div>
+    <canvas id="lensCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note">lm_head 不必等到第 32 层才能用 —— <strong>把它提前挂到每一层的总线顶端，直接读出当前概率</strong>（nostalgebraist 2021 首创的 logit lens）。模拟读数（P(France)，prompt「The capital of France is」）：第 1-6 层瞎猜（18→27%），<strong>第 7 层跳到 62.1%</strong>、第 8 层 83.7%、第 10 层 99.1% —— 事实在<strong>中游层成形</strong>，后 20 层只做精修。这正是 ROME 用因果追踪独立发现的结论（<a href="ffn.html">FFN 页</a>：事实定位在中游 MLP）—— 两条完全不同的路指向同一栋楼。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>logit lens 显示「前 6 层瞎猜、第 7 层跳变、后 20 层躺平」—— 这说明浅层是废物吗？</p>
+    <div class="options">
+      <button class="opt">不是：浅层在搭脚手架 —— 指代消解、句法结构、位置信息都是事实成形的前置工程，只是这些贡献不直接体现在 France 这个词的概率上</button>
+      <button class="opt">是，可以安全剪掉前几层</button>
+      <button class="opt">说明模型浪费了参数</button>
+    </div>
+    <div class="explain">读数是「对一个问题的回答」，不是「这层的全部工作」—— 下一层的多车道视角会完全解释这件事。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">并发：总线上的多车道协议</h2></div>
+  <p class="level-goal">本层目标：理解 4096 维怎么塞下所有信息互不打架。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 子空间车道：指派 / 句法 / 位置 / 事实 各走各的维数段</div>
+    <canvas id="laneCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">Anthropic 在两层玩具模型上找到了<strong>「总线协议」</strong>：注意力头把「拷贝指针」写进一组维度、FFN 往另一些维度写事实 —— 写入者之间像用了信道划分，几乎不互相覆盖。<a href="attention.html">Attention 页</a>的多头分工（头 3 指派 / 头 7 句法 / 头 12 位置）正是车道视角的另一面：每个头是总线上的一个收发器，各自订阅几条车道。这解释了 L3 的谜题：<strong>前 6 层在铺设车道（脚手架），第 7 层的车到了</strong> —— 不同层的贡献在不同维度段上并行推进，logit lens 只看到了「事实车道」的读数。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>FFN 写记忆和 Attention 搬信息同时发生，为什么不会互相覆盖？</p>
+    <div class="options">
+      <button class="opt">它们轮流工作，一次只有一个在跑</button>
+      <button class="opt">写入者对不同子空间（车道）写入：位置信息、句法特征、事实内容各占不同的维数段，加上写入是「加增量」不是「覆盖」，冲突概率极小</button>
+      <button class="opt">有专门的仲裁模块协调</button>
+    </div>
+    <div class="explain">4096 维的「地方大」+ 加法写入的「不覆盖」—— 分布式的信道划分，没有仲裁者。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">总账：全站地图重画</h2></div>
+  <p class="level-goal">本层目标：用一根总线重新理解全站。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 一根管道，各区段的账</div>
+    <canvas id="mapCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">尺寸账（8B 级实算）：总线瞬时状态仅 <strong>8KB/token</strong>（4096 维×2 字节），但 KV Cache —— 每层总线的「钥匙快照」—— 要 <strong>0.5MB/token，是现在的 64 倍</strong>（历史比现在贵）；每 token 的写入位共 4096×32 = <strong>13.1 万格</strong>；顶端读出器 lm_head 5.25 亿参数（与嵌入同尺寸）。全站重画：<a href="tokenizer.html">Tokenizer</a>（进站编码）→ <a href="attention.html">Attention</a>（收发器）→ <a href="ffn.html">FFN</a>（记忆写入器）→ <a href="kv-cache.html">KV Cache</a>（历史快照）→ <a href="mla.html">MLA</a>（快照压缩）→ Sampling（顶端读出）—— <strong>原来每页都在描述这根管道的不同区段</strong>。加深 = 多几个站点（梯度靠加法保通），加宽 = 车道变多（信息更并行）—— 两笔不同的账，<a href="scaling.html">Scaling Laws</a> 页的 N 和 d 在这里有了实体。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>瞬时总线 8KB/token，KV Cache 却要 0.5MB/token —— 为什么历史比现在贵 64 倍？</p>
+    <div class="options">
+      <button class="opt">KV Cache 存了冗余数据，可以无损删掉</button>
+      <button class="opt">因为 K/V 是 fp16 而总线是 fp8</button>
+      <button class="opt">总线只存「当前 token 此刻的状态」（1 份），KV Cache 存「每个历史 token 在每层的钥匙」（序列长 × 层数 × 2 份）—— 现在是一帧，历史是一部影片</button>
+    </div>
+    <div class="explain">这正是 KV Cache 页开篇账的残差流版解释 —— 也是 MLA 砍 57 倍的对象所在。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>Transformer = 一根 4096 维总线 + 32 个并联写入站，层不是传送带（L1）</li>
+      <li>h_L = x + Σfᵢ(x)：原始嵌入活到最后（cos 0.49），加法给信号和梯度双通航（L2）</li>
+      <li>logit lens：事实在中游层成形（第 7 层 27→62%），浅层在搭脚手架（L3）</li>
+      <li>多车道协议：指派/句法/位置/事实各占子空间，加法写入互不覆盖（L4）</li>
+      <li>总线 8KB vs KV 0.5MB/token：现在是一帧，历史是一部影片 = 64×（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>残差流 (residual stream)</dt><dd>贯穿全层的主干向量 —— 每层读它、往里加增量；模型的本体而非附件。</dd>
+    <dt>残差连接 (residual connection)</dt><dd>h ← h + f(h) 的加法结构 —— ResNet 2015 引入，前向信号与反向梯度双直通。</dd>
+    <dt>望远镜级数 (telescoping sum)</dt><dd>h_L = x + Σfᵢ(x) 的展开形式 —— 每层的贡献作为独立增量可分离观察。</dd>
+    <dt>logit lens</dt><dd>把 lm_head 提前挂到中间层顶端读出概率的透视术 —— 事实「在中间层成形」的可视化证据。</dd>
+    <dt>lm_head / unembedding</dt><dd>总线 → 词表的读出矩阵（4096×128256）—— 常与词嵌入共享权重（ tying ）。</dd>
+    <dt>子空间车道 (subspace channels)</dt><dd>不同类型信息各占总线的不同维数段 —— Anthropic 玩具模型发现的「总线协议」。</dd>
+    <dt>LayerNorm / RMSNorm</dt><dd>每站进出总线的「信号整流器」—— 把写入幅度归一，防总线幅值漂移。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="attention.html">Attention</a>（收发器）· <a href="ffn.html">FFN</a>（记忆写入器 · 写入残差流×4 的欠账在此还）· <a href="kv-cache.html">KV Cache</a>（总线的历史快照）· <a href="mla.html">MLA</a>（快照压缩 57×）· <a href="tokenizer.html">Tokenizer</a>（进站编码）· <a href="scaling.html">Scaling Laws</a>（加深 vs 加宽两笔账）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · residual · 图解版 · 架构三部曲终章</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="residual.js"></script>
+</body>
+</html>
