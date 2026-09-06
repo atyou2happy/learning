@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型合并 — 权重算术：把两个模型「加」在一起</title>
+<meta name="description" content="Model Merging：两个微调模型逐元素相加 = 会双方技能的正常模型。任务向量算术（加=学/减=遗忘）、夹角模拟器看正交无损与冲突、TIES 三步仲裁、DARE 随机丢 90% 干扰÷100、四代方法演进与 frankenmerge 文化 —— 免训练的多任务方案。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 奇观</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 向量</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 冲突</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 方法</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 账本</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>merging</div>
+    <div class="topic-kicker">权重空间 · 免训练的多任务</div>
+    <h1 class="topic-title">模型合并：权重算术</h1>
+    <p class="topic-sub"><a href="lora.html">LoRA 页</a>说微调是「插低秩小卡」—— 那这些小卡能不能当算术对象？能：<strong>M_merged = M_base + (M_A − M_base) + (M_B − M_base)</strong> —— 两个各自微调的模型逐元素相加，产物还是一个正常模型，<strong>同时会两边的技能</strong>（Ilharco 2022「任务向量」）。更疯的 DARE：随机丢掉 90% 的增量、剩下的放大 10 倍，性能几乎不降，任务间干扰却<strong>除以 100</strong>。不训练、零推理开销 —— 最反直觉的一页。</p>
+    <div class="topic-meta">
+      <span class="tag">夹角冲突模拟器</span>
+      <span class="tag">DARE 干扰账</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="lora.html" style="color:inherit">LoRA</a> · <a href="ffn.html" style="color:inherit">FFN</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">奇观：相加还是个模型</h2></div>
+  <p class="level-goal">本层目标：承认这违反直觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 任务向量算术的四种运算（node 实测 cos）</div>
+    <canvas id="arithCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">定义<strong>任务向量 τ = M_ft − M_base</strong>（微调权重减基座）—— 「学到的技能」从此是一个向量。四则运算（node 实测，1000 维玩具，两任务不相交支撑）：<strong>加</strong> = M+τ_A+τ_B 同时会两技能（合并后与两个任务向量 cos 均 ≈ 0.707 = 1/√2，双保留）；<strong>减</strong> = M+τ_A−τ_A 完全遗忘 A（cos(u)→0、cos(v)→1.0）；<strong>乘负</strong> = 反学习（论文：降低「不该会」的能力）；<strong>缩放</strong> = 技能强度旋钮。神经网络的技能居然生活在近似线性的权重空间里 —— 这是一切合并方法的地基。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么两个模型直接相加不会得到「乱码模型」？</p>
+    <div class="options">
+      <button class="opt">因为相加时自动做了归一化</button>
+      <button class="opt">因为微调改动高度稀疏/低秩且方向近似独立：τ_A 动的维度和 τ_B 大多不重叠，相加 = 两份改动各自落位 —— 隐含前提是「同一基座的微调住在兼容的坐标系里」</button>
+      <button class="opt">因为大模型的参数太多了，错误被平均掉</button>
+    </div>
+    <div class="explain">「兼容坐标系」是关键前提 —— 换两个不同基座直接加，确实会得到乱码。L3 看这个前提什么时候破。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">向量：技能的四种操作</h2></div>
+  <p class="level-goal">本层目标：把「技能」彻底向量化。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · τ 的操作面板 + LoRA 的同构</div>
+    <canvas id="vecCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note"><strong>LoRA 的 ΔW=B·A 就是一个任务向量</strong>（<a href="lora.html">LoRA 页</a>的「插卡」在此获得算术身份）：合并 = 把两张卡的增量都加进基座；多 LoRA 切换 = 基座 + 可插拔 τ。工程现场早已在用：swarm 微调出 N 个小模型再合并（一次训练预算买多个专家）、安全对齐向量可以事后<strong>减掉</strong>（也解释了为什么对齐能被廉价绕过 —— 反学习在权重空间是减法）。任务向量视角把「技能」从模型文件降维成了一个 N 维数组。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>「减掉任务向量 = 遗忘」这个事实，对对齐安全意味着什么？</p>
+    <div class="options">
+      <button class="opt">没有影响，安全靠数据</button>
+      <button class="opt">意味着对齐无法被破坏</button>
+      <button class="opt">对齐如果主要存在于一个「可减」的增量里，理论上也能被减法剥离 —— 对齐应尽量与基座能力纠缠（不可分离），而不是薄薄一层</button>
+    </div>
+    <div class="explain">任务向量的可逆性是双刃剑：工程上方便，安全上是负债。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">冲突：夹角决定命运</h2></div>
+  <p class="level-goal">本层目标：看懂合并什么时候失败。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 夹角冲突模拟器（拖滑块转 τ_B 的方向，实时算双任务保留）</div>
+    <div style="margin:10px 0;display:flex;align-items:center;gap:10px">
+      <span style="font-size:13px;color:var(--text-dim)">两任务向量夹角</span>
+      <input type="range" id="angSlider" min="0" max="90" value="90" style="flex:1">
+      <span id="angVal" style="font-size:13px;font-family:monospace;color:var(--text)">90°</span>
+    </div>
+    <canvas id="confCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">合并的失败模式全在几何里：夹角 <strong>90°（正交）</strong>—— 两技能落在不同维度子空间，相加 = 平面叠加，各自保留 1/√2 ≈ 71%（node 实测 0.708/0.706）；夹角变小 —— 支撑重叠，同一维度上两个任务<strong>互相踩脚</strong>（符号相反直接抵消，符号相同则过冲）；夹角 0° —— 完全冲突，只能留一个。真实模型的任务向量大多近似正交（<strong>技能住在一个极高维空间的稀疏角落里</strong>，随机方向在高维几乎必然近正交）—— 这就是「直接相加居然能用」的几何解释。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么「高维空间里随机两个方向几乎必然近正交」救了模型合并？</p>
+    <div class="options">
+      <button class="opt">维度越高，两个随机向量的期望点积越接近 0（cos ~ 1/√N）—— 两个独立微调各自找到的「技能方向」撞车概率随维度暴涨而坍缩，正交红利是免费默认值</button>
+      <button class="opt">因为高维里没有冲突</button>
+      <button class="opt">因为优化器会主动避开</button>
+    </div>
+    <div class="explain">「维度诅咒」的反面 —— 维度祝福。但近亲任务（同为代码任务）方向会刻意相关，冲突仍真实存在 —— L4 的方法就是治这个的。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">方法：四代演进 + DARE 干扰账</h2></div>
+  <p class="level-goal">本层目标：看懂每代方法治什么病。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 线性 → SLERP → TIES → DARE（DARE 干扰账 node 实算）</div>
+    <canvas id="methodCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note"><strong>①线性平均</strong>（直接相加/平均）：正交时够用，冲突时互相抵消。<strong>②SLERP</strong>：球面插值走大圆 —— 权重空间的「中点」不该走直线（范数失真）。<strong>③TIES</strong>（Yadav 2023）三步仲裁：剪枝（每个模型只留 top 幅度）→ 符号冲突解决（同维符号打架时按总幅度投票，输家清零）→ 平均 —— 治「抵消」。<strong>④DARE</strong>（Yu 2023）最反直觉：各自<strong>随机丢 90% 增量、剩余 ×10 缩放</strong> —— 干扰账（node 实算）：100 个重叠维上，双方同时存活的冲突维期望 = 100×k² ，k=0.1 时只剩 <strong>1 个（干扰 ÷100）</strong>，而论文实测 95 任务性能 ≈ 不降 —— 独立稀疏化让碰撞概率平方衰减，自身的信号靠缩放补回。<strong>「让路」比「仲裁」更便宜。</strong></p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>DARE 随机丢 90% 为什么性能不崩？</p>
+    <div class="options">
+      <button class="opt">因为丢的都是不重要的参数</button>
+      <button class="opt">两个机制：①剩余 ×1/(1-p) 缩放保住总幅度；②任务间干扰按 k² 衰减（÷100）比自身信号损失（÷10）快得多 —— 净效应反而更干净（与 dropout 抑制共适应同族）</button>
+      <button class="opt">因为 90% 的参数本来就是冗余的</button>
+    </div>
+    <div class="explain">注意选项一与正确答案的区别：DARE 是「随机」丢，不是按重要性 —— 妙处正在于不需要知道谁重要。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">账本：三种多任务方案</h2></div>
+  <p class="level-goal">本层目标：会算多任务的经济学账。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 合并 vs 多 LoRA vs 大一统微调</div>
+    <canvas id="costCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">三种「一个模型会 N 个任务」的路线：<strong>合并</strong>（N 次 LoRA + 一次权重算术，0 额外推理开销，但技能上限受冲突制约）；<strong>多 LoRA 路由</strong>（运行时换卡，技能无损但每次都要加载/切换，工程复杂）；<strong>大一统微调</strong>（混合数据训一遍，上限最高但要一次性训练预算 + 数据工程）。mergekit（2024）把合并变成配置文件 —— <strong>frankenmerge 文化</strong>：开源社区像调酒一样混合模型，OpenRouter 上常驻 merged 系产物。<strong>权重空间的可组合性，是开源生态独有的红利</strong> —— 闭源 API 模型你永远做不了减法。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>「合并是开源生态独有的红利」—— 为什么？</p>
+    <div class="options">
+      <button class="opt">因为闭源模型参数量太大</button>
+      <button class="opt">因为合并技术有专利</button>
+      <button class="opt">权重算术的前提是拿到权重文件 —— API 模型只暴露 logits，任务向量根本不可得；开源世界里「技能=可操作的数组」，闭源世界里技能只能靠 prompt 粗糙地模拟</button>
+    </div>
+    <div class="explain">开放权重 = 开放了权重空间的一切运算 —— 这是开源与 API 的本质区别之一，不只是「能本地跑」。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>任务向量 τ = M_ft − M_base：加=学、减=遗忘、乘负=反学习、缩放=强度旋钮（L1/L2）</li>
+      <li>LoRA 的 ΔW 就是任务向量 —— 插卡获得算术身份（L2）</li>
+      <li>正交=无损叠加（各自 1/√2）；高维随机方向几乎必然近正交 —— 合并的几何红利（L3）</li>
+      <li>DARE 随机丢 90%：干扰 ÷100（k² 衰减）＞ 自身损失 ÷10 —— 让路比仲裁便宜（L4）</li>
+      <li>合并 0 训练 0 推理开销；开放权重 = 开放权重空间的运算 —— 开源独有红利（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>模型合并 (model merging)</dt><dd>把多个模型的权重按算术规则合成一个 —— 免训练的多任务方案。</dd>
+    <dt>任务向量 (task vector)</dt><dd>τ = M_ft − M_base —— 微调学到的技能作为可运算的向量（Ilharco 2022）。</dd>
+    <dt>反学习 (unlearning)</dt><dd>减去/乘负任务向量以移除某能力 —— 对齐安全的双刃剑。</dd>
+    <dt>SLERP</dt><dd>球面线性插值 —— 两权重的「中点」沿大圆走，保范数。</dd>
+    <dt>TIES</dt><dd>剪枝 → 符号冲突仲裁 → 平均 —— 三步治抵消（Yadav 2023）。</dd>
+    <dt>DARE</dt><dd>随机丢弃增量 90% + ×1/(1-p) 缩放 —— 干扰 k² 衰减（Yu 2023）。</dd>
+    <dt>mergekit / frankenmerge</dt><dd>开源合并基建 / 社区混模文化 —— 权重算术的工程化。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="lora.html">LoRA</a>（任务向量的低秩载体）· <a href="ffn.html">FFN</a>（技能稀疏分布的实体基础）· <a href="pretraining.html">Pretraining</a>（基座从哪来）· <a href="rlhf.html">RLHF</a>（对齐作为可减向量的安全含义）· <a href="mostik.html">Mostik</a>（多模型协作的另一路：不合并只搭桥）· <a href="scaling.html">Scaling Laws</a>（能力住低维子空间的宏观证据）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · merging · 图解版 · 权重算术</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="merging.js"></script>
+</body>
+</html>
