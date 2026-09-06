@@ -16,6 +16,7 @@
 - [MoE](topics/moe.html) — 模型架构 · 混合专家 · Router 动画 + 参数账本（671B/37B/5.5%）
 - [Quantization](topics/quantization.html) — LLM 部署 · 量化 · 网格滑块 + 显存计算器（前置：KV Cache）
 - [Tokenizer / BPE](topics/tokenizer.html) — LLM 基础 · 分词 · BPE 合并动画 + 上下文换算器（全站第 0 层）
+- [Reasoning](topics/reasoning.html) — LLM 推理 · 推理模型 · 思考预算滑块 + R1 配方（前置：采样策略）
 
 ## 页面结构（五层）
 

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reasoning — 推理模型：先想再答</title>
+<meta name="description" content="推理模型 / Test-Time Compute：CoT 本质、R1 四阶段配方、aha moment、思考预算滑块、20k 思考 token 的账单。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 两种模式</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② R1 配方</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ aha</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 预算滑块</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 账单</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Reasoning</div>
+    <div class="topic-kicker">LLM 推理 · 范式转移</div>
+    <h1 class="topic-title">Reasoning：推理模型</h1>
+    <p class="topic-sub">同一道题：直接答 8×7=54 ✗，先写四步思考再答 56 ✓ —— 模型没换，换的是「允许先想多久」。o1/R1 开启的范式：把更多计算搬进推理期，用思考 token 换准确率。同一基座 AIME 15.5% → 79.8%，没人教过任何解题步骤。</p>
+    <div class="topic-meta">
+      <span class="tag">思考预算滑块</span>
+      <span class="tag">R1 配方动画</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="sampling.html" style="color:inherit">采样策略</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">现象：计算搬进上下文</h2></div>
+  <p class="level-goal">本层目标：看清「直接答」与「先思考」的差异不是模型能力，而是计算位置。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一道题，两种模式</div>
+    <canvas id="twoCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note">CoT 的本质：每生成一个思考 token，模型就多做一次完整 forward（回忆 <a href="kv-cache.html">KV Cache 页</a>：每 token 都要在全部历史上做 attention）。串行思考 = 给模型<strong>深度</strong>——中间结果写进上下文，后面的 forward 能「读到」它。这不是魔法，是把原来一次 forward 装不下的计算摊开成 N 步。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么「先想再答」能解决直接答会错的题？</p>
+    <div class="options">
+      <button class="opt">思考让模型变得更聪明了，参数在思考中更新</button>
+      <button class="opt">思考 token 把中间结果写进上下文 —— 后续每一步 forward 都能读到，等于把深度计算摊进序列维度</button>
+      <button class="opt">因为思考时温度更高</button>
+    </div>
+    <div class="explain">参数全程冻结。变的是「有效计算量」：一步 forward 的深度有限，N 步串行 = N 倍深度 + 显式记忆。这就是 test-time compute scaling 的全部含义。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">R1 配方：没人教，自己学会</h2></div>
+  <p class="level-goal">本层目标：记住四阶段流水线，以及最反直觉的一点 —— 反思不是教出来的。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · DeepSeek-R1 四阶段配方</div>
+    <canvas id="recipeCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">奖励设计极简：答案对 +1、格式对 +1，仅此而已。但 71% (R1-Zero 纯 RL) 的成绩说明：<strong>只要奖励信号足够干净，「检查、回溯、换个思路」这些策略会自己长出来</strong>——因为它们真的提高答对率。SFT 冷启动（阶段1）只是为了解决可读性和语言混杂，不是教推理。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>R1-Zero（跳过 SFT 直接 RL）暴露的主要问题是什么？</p>
+    <div class="options">
+      <button class="opt">语言混杂（中英乱切）+ 可读性差 —— 推理能力有了，但「话说不清」，所以完整配方需要 SFT 冷启动打底</button>
+      <button class="opt">完全学不会推理</button>
+      <button class="opt">推理太慢</button>
+    </div>
+    <div class="explain">R1-Zero 的 AIME 71.0% 证明纯 RL 就能涌现推理；SFT 冷启动解决的是表达层。二者分工不同 —— 这是「配方」二字的意义。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">aha moment：涌现的反思</h2></div>
+  <p class="level-goal">本层目标：理解训练曲线上那根「突增」是什么，为什么它标志性。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 训练步数 vs 平均思考长度</div>
+    <canvas id="ahaCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">RL 中期，模型开始自发写出「等一下，让我重新想想」—— 论文称之为 aha moment。此刻没人给它示范过「反思」这个词的用法。与此同时思考长度激增：模型发现「多想 = 更可能对 = 更多奖励」，于是<strong>自己拉长了自己的思考</strong>。这一刻是「推理策略从奖励中涌现」的直接证据。</p>
+  </div>
+
+  <div class="formula">
+    奖励 = 1[答案正确] + 1[格式合规] · 无过程奖励 · 无人工演示
+    <span class="ann">过程奖励 (PRM) 需要人工标注每步对错 —— R1 证明结果奖励 (ORM) 已足够让过程策略涌现</span>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">预算：对数线性的收益，线性的成本</h2></div>
+  <p class="level-goal">本层目标：拖动滑块，找到「性价比拐点」的直觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 准确率 vs 思考预算（拖动滑块）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="budgetSlider" min="512" max="32768" step="256" value="8192" style="flex:1">
+      <span id="budgetLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:60px">8k tok</span>
+    </div>
+    <canvas id="budgetCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">绿线：预算 ×16 → 准确率 +14pp（对数线性，示意曲线，渐近 R1 的 79.8%）；红虚线：成本严格线性。两条线的张口就是<strong>性价比的流失</strong> —— 4k→32k 花八倍钱换 10.5pp，而 512→4k 花 8 倍换 10.5pp 之外还从 58.8% 起步。工程上的含义：默认预算设在曲线「膝盖」处（本例 ~8k），难题再放宽。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>R1 官方为什么推荐 T=0.6 而不是 T=0？（<a href="sampling.html">采样页</a>的进阶应用）</p>
+    <div class="options">
+      <button class="opt">为了省钱</button>
+      <button class="opt">T=0 会过拟合</button>
+      <button class="opt">贪婪解码在长思考里容易陷入重复循环 —— 探索性（多样性）是「换个思路试试」的前提，思考天然需要采样噪声</button>
+    </div>
+    <div class="explain">这是「贪心重复陷阱」的高级版：普通回答重复几个词无伤大雅，思考链重复 = 整段推理报废。0.5-0.7 的温度给反思留出岔路的可能。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：思考的账单与路由</h2></div>
+  <p class="level-goal">本层目标：算清一次深度思考的真实开销，并知道何时该关掉它。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 20k 思考 token 的账单（13B 模型）</div>
+    <canvas id="billCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">思考的 KV Cache 是权重的 59% —— <a href="continuous-batching.html">Continuous Batching</a> 页的每请求显存翻倍、<a href="quantization.html">量化页</a>的 KV int8/int4、<a href="pagedattention.html">PagedAttention</a> 的按页回收，三条防线在这里全部用上。API 计费同理：思考 token 照单全收。</p>
+  </div>
+
+  <table>
+    <tr><th>场景</th><th>建议</th></tr>
+    <tr><td>数学 / 代码 / 规划难题</td><td>开思考，预算给足（8k-32k）—— 对数线性前段收益最肥</td></tr>
+    <tr><td>简单问答 / 翻译 / 文案</td><td>关思考或低预算 —— 曲线在 easy 任务上饱和更早，白花钱</td></tr>
+    <tr><td>混合流量（服务端）</td><td>easy/hard 路由：小模型先判断难度，再决定给不给思考预算 —— 类似 <a href="mostik.html">Mostik</a> 的协作思路</td></tr>
+    <tr><td>蒸馏替代</td><td>固定场景可用蒸馏版（R1-Distill 72.6% &gt; 同尺寸自 RL）—— 把思考模式烧进权重，推理时少付账单</td></tr>
+    <tr><td>参数速查</td><td><code>thinking budget</code> / <code>max_thinking_tokens</code> / <code>reasoning_effort=low|medium|high</code>（各平台命名不一）</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>思考 = 把计算搬进上下文：参数不变，串行 forward 换深度（L1）</li>
+      <li>R1 配方四阶段：SFT 冷启动只是表达层，推理策略从结果奖励中涌现（L2）</li>
+      <li>aha moment：没人教反思，它是「答对拿奖励」的副产品（L3）</li>
+      <li>收益对数线性、成本线性 —— 预算设在曲线膝盖处，难题再放宽（L4）</li>
+      <li>20k 思考 KV = 权重 59%；easy/hard 路由 + 蒸馏是两把省菜刀（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>CoT (Chain-of-Thought)</dt><dd>把中间步骤写成文本再作答 —— 推理模型的前身（prompt 技巧版）。</dd>
+    <dt>test-time compute</dt><dd>推理期多花计算换质量 —— 与训练期 scaling 并列的第二条 Scaling Law。</dd>
+    <dt>GRPO</dt><dd>组相对策略优化：同题采样一组，以组内相对优势估计基线 —— 省掉价值网络。</dd>
+    <dt>ORM / PRM</dt><dd>结果奖励（只看答案）vs 过程奖励（每步打分）。R1 证明 ORM 足以涌现过程策略。</dd>
+    <dt>蒸馏 (distill)</dt><dd>用大推理模型的思考轨迹 SFT 小模型 —— R1-Distill 系列，便宜且不掉太多。</dd>
+    <dt>thinking budget</dt><dd>限制思考 token 上限的参数 —— 超出即强制作答，性价比拐点的工程旋钮。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="sampling.html">采样策略</a>（T=0.6 的原因）· <a href="kv-cache.html">KV Cache</a>（思考的显存账）· <a href="speculative-decoding.html">Speculative Decoding</a>（同样多花算力，一个买深度一个买速度）· <a href="mostik.html">Mostik</a>（大小模型协作的另一种分工）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Reasoning · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="reasoning.js"></script>
+</body>
+</html>
