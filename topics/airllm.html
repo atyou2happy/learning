@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AirLLM — 4GB 显存跑 70B：时间换空间的极致</title>
+<meta name="description" content="AirLLM：逐层流式加载、单卡 4GB 跑 70B/671B 甚至 2.8T、Kimi K3 3.72GB、四机制旋钮、每 token 搬 140GB 的代价、大模型塞小卡四路线对照。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 140GB→1.75GB</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 流水动画</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 速度账</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 四旋钮</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 成绩单</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>AirLLM</div>
+    <div class="topic-kicker">LLM 部署 · 时间换空间</div>
+    <h1 class="topic-title">AirLLM</h1>
+    <p class="topic-sub">单张 4GB 显卡跑 70B 原始权重 —— 不量化、不蒸馏、不剪枝。魔法只有一句：<strong>任意时刻显存里只住一层</strong>（1.75GB），其余 79 层在 NVMe 上排队，算完即弃、下层层顶上。代价也明码标价：每生成一个 token，全模型从磁盘过一遍 —— 这不是 bug，是「时间换空间」的极致交易。</p>
+    <div class="topic-meta">
+      <span class="tag">逐层流水动画</span>
+      <span class="tag">官方成绩单</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="quantization.html" style="color:inherit">Quantization</a> · <a href="moe.html" style="color:inherit">MoE</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">核心：显存从「装下全部」到「装下一层」</h2></div>
+  <p class="level-goal">本层目标：理解 140GB→1.75GB 的杠杆从哪来。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 全量装载 vs 单层流式</div>
+    <canvas id="layerCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">大模型推理本质是逐层矩阵乘法（<a href="attention.html">Attention 页</a>的一层）：第 N 层输出是第 N+1 层输入，<strong>任意时刻只有一层真正在计算</strong> —— 那 why not 只把「正在干活的那层」放进显存？70B fp16 = 140GB ÷ 80 层 = 单层 1.75GB，加上 <a href="kv-cache.html">KV Cache</a> 与激活，4GB 卡正好装下。这不是压缩 —— 是<strong>重新安排参数的生命周期</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么这个技巧在 7B 上反而没用？</p>
+    <div class="options">
+      <button class="opt">7B 不能分层</button>
+      <button class="opt">7B fp16 只有 14GB，24GB 卡能整装，标准推理快一个数量级 —— 分层加载的价值随模型规模放大：全量装载越不现实，逐层换入的相对代价越可接受</button>
+      <button class="opt">7B 没有层</button>
+    </div>
+    <div class="explain">工具没有银弹，只有适用区间：AirLLM 的舞台是「显存装不下 + 必须原精度」的极端场景 —— 模型越大它越合理。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">流水：载入 → 计算 → 释放 → 下一层</h2></div>
+  <p class="level-goal">本层目标：点按钮看一层的一生，理解 80 次循环 = 1 个 token。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 逐层流水动画（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="airBtn" class="opt" style="border:1px solid var(--border)">推进 → (第 1/5 段演示)</button>
+    </div>
+    <canvas id="flowCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">橙色传输 → 绿色计算 → 红色释放，循环 80 次才产出 <strong>1 个 token</strong>。首 token 也要把 80 层全过一遍（prefill 阶段同样逐层）。这就是为什么延迟以「秒」计 —— 但换来的是任何装得下「一层」的卡都能跑任何模型。</p>
+  </div>
+
+  <div class="formula">
+    显存需求 = 单层权重 + KV cache + 激活 · 与总参数量无关
+    <span class="ann">推论：2.8T 的 Kimi K3 只要 3.72GB —— 因为决定显存的是「最大的一层」不是「全部的层」（MoE 稀疏加载再加一层折扣）</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">代价：每 token 搬一遍全模型</h2></div>
+  <p class="level-goal">本层目标：算清速度账，建立「什么时候该用」的判断。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · IO 账单：400 倍差距</div>
+    <canvas id="speedCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">70B fp16 在 7GB/s NVMe 上：140GB ÷ 7GB/s ≈ 20 秒/token；开 4bit 块级量化（IO÷4）≈ 5 秒 —— 与社区实测 4-6 秒/20token 吻合。对照整装在 2×A100 上 ~0.05 秒：<strong>400 倍差距，时间换空间的明码标价</strong>。反直觉细节：长序列时单 token 反而更慢（attention 计算∝序列长，IO 恒定）—— 瓶颈行为与 <a href="continuous-batching.html">vLLM 系</a>完全相反。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>块级量化在 AirLLM 里为什么「几乎不掉精度」？（对照 <a href="quantization.html">量化页</a>）</p>
+    <div class="options">
+      <button class="opt">因为量化技术更好</button>
+      <button class="opt">因为没真的量化</button>
+      <button class="opt">瓶颈在磁盘 IO 不在计算 —— 只需压「存储尺寸」不需要压「计算格式」：权重按块量化存储、载入后仍以 fp16 计算，避开了激活量化的精度雷区</button>
+    </div>
+    <div class="explain">「只需要小」和「既要小又要快」是两个问题 —— AirLLM 的量化只为省 IO，反量化后照常 fp16 算，精度天然稳（论文 arXiv:2212.09720）。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">四旋钮：机制各管一段</h2></div>
+  <p class="level-goal">本层目标：记住四个独立机制各治什么瓶颈。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 四机制卡片</div>
+    <canvas id="knobCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">①分层加载决定<strong>能不能跑</strong>（显存上限）②块级量化决定 <strong>IO 时间</strong>（~3x）③预取让 IO 与计算<strong>重叠</strong>（~10%，v2.5）④稀疏 MoE 只载被路由的专家（<a href="moe.html">MoE 页</a>的路由决定哪些专家有戏份 —— 671B→12GB、235B→3GB 的原因）。独立开关，但上限受最弱一环制约 —— 磁盘仍是瓶颈时预取就白搭。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：成绩单与路线选择</h2></div>
+  <p class="level-goal">本层目标：知道官方实测数字，以及 AirLLM 在四条路线中的位置。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 官方实测成绩单（README 2026-09）</div>
+    <canvas id="boardCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">截至 2026 年 9 月：Kimi K3（2.8T，最大开源模型）3.72GB 实测跑通；DeepSeek-V3 671B ~12GB；Qwen3.8-Flash-Next 125B 训练 &lt;6GB —— <strong>连训练都上了</strong>（2026/09 新增：冻结权重逐层流 + adapter 驻留，正是 <a href="lora.html">LoRA 页</a>冻结思想的极端版）。一行 <code>AutoModel.from_pretrained(...)</code> 通吃所有主流模型。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 「大模型塞小卡」四条路线</div>
+    <canvas id="routesCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">量化（压字节）、MoE（少激活）、PagedAttention（管 KV）、AirLLM（权重住磁盘）—— 四条路线各治一段显存账，且可叠加：AirLLM 自己就用块级量化 + MoE 稀疏。<strong>选它的时机：显存装不下 + 延迟不敏感 + 不想掉精度</strong> —— 论文复现、边缘 demo、或者单纯想让 2.8T 的模型在自己的游戏本上喘口气。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>核心一句话：任意时刻只有一层在计算 → 显存只需装下一层（1.75GB）（L1）</li>
+      <li>80 次载入-计算-释放循环 = 1 个 token；首 token 也要全模型过一遍（L2）</li>
+      <li>代价明码标价：每 token 搬 140GB，比整装慢 100-400 倍（L3）</li>
+      <li>四旋钮各管一段：显存上限 / IO 时间 / 重叠 / 专家稀疏（L4）</li>
+      <li>2.8T 只要 3.72GB；适用区间 = 装不下 + 不敏感 + 要精度（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>layer-wise streaming</dt><dd>逐层流式加载 —— 权重按层切分存盘，用时调入、算完释放。</dd>
+    <dt>offloading（卸载）</dt><dd>把放不下的部分挪到内存/磁盘 —— AirLLM 是其极端形态：全卸载只留一层。</dd>
+    <dt>块级量化</dt><dd>按块（block-wise）压缩存储、载入后 fp16 计算 —— 只为省 IO 不为省算力。</dd>
+    <dt>prefetching（预取）</dt><dd>后台线程在计算层 N 时预读层 N+1 —— IO 与计算重叠 ~10%。</dd>
+    <dt>专家稀疏加载</dt><dd>MoE 模型只载入被路由命中的专家 —— 大模型显存骤降的第二杠杆。</dd>
+    <dt>first token latency</dt><dd>首 token 延迟 —— AirLLM 中同样要全模型过一遍（prefill 也逐层）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="quantization.html">Quantization</a>（另一条省显存路线）· <a href="moe.html">MoE</a>（稀疏激活）· <a href="pagedattention.html">PagedAttention</a>（KV 侧的显存管理）· <a href="kv-cache.html">KV Cache</a>（显存账的另一半）· <a href="lora.html">LoRA</a>（训练侧的冻结思想）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · AirLLM · 图解版 · 数据源 github.com/lyogavin/airllm README (2026-09)</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="airllm.js"></script>
+</body>
+</html>

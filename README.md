@@ -26,6 +26,7 @@
 - [Diffusion](topics/diffusion.html) — 生成模型 · 扩散 · 加噪滑块 + CFG 引导 + 两范式对照（前置：ViT/CLIP）
 - [LoRA / PEFT](topics/lora.html) — LLM 微调 · 低秩适配 · rank 滑块 + QLoRA 1.1TB→48GB（前置：Quantization）
 - [Self-Attention / QKV](topics/attention.html) — LLM 基础 · 枢纽概念 · 指代热力图 + √d 开关（前置：Tokenizer）
+- [AirLLM](topics/airllm.html) — LLM 部署 · 逐层流式加载 · 4GB 跑 70B（前置：Quantization）
 
 ## 页面结构（五层）
 
