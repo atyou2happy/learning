@@ -13,6 +13,7 @@
 - [Continuous Batching](topics/continuous-batching.html) — LLM 推理服务 · 迭代级调度 · 回填甘特图动画（前置：PagedAttention）
 - [Speculative Decoding](topics/speculative-decoding.html) — LLM 推理加速 · 投机解码 · 验证游戏（前置：KV Cache）
 - [采样策略](topics/sampling.html) — LLM 推理 · Temperature/Top-k/Top-p · 温度滑块（前置：Speculative Decoding）
+- [MoE](topics/moe.html) — 模型架构 · 混合专家 · Router 动画 + 参数账本（671B/37B/5.5%）
 
 ## 页面结构（五层）
 

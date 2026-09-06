@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoE — 混合专家：671B 的身体，37B 的电费</title>
+<meta name="description" content="MoE 混合专家：Router 稀疏激活动画、DeepSeek-V3 参数账本（671B/37B/5.5%）、专家坍缩模拟与 aux loss、与 Mostik/SD 的定位对比。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 点菜</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② Router</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 账本</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 坍缩</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 落地</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>MoE</div>
+    <div class="topic-kicker">模型架构 · 稀疏激活</div>
+    <h1 class="topic-title">MoE：混合专家</h1>
+    <p class="topic-sub">Dense 模型的悖论：知识越多参数越多，但每个 token 都要为全部参数买单。MoE 把 FFN 切成 256 个专家，让 Router 为每个 token 点菜 —— 只激活 5.5% 的参数，却拥有 100% 的知识容量。DeepSeek-V3 用它把训练成本打到 $5.5M，是 GPT-4 传闻成本的零头。</p>
+    <div class="topic-meta">
+      <span class="tag">Router 动画</span>
+      <span class="tag">参数账本</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="pagedattention.html" style="color:inherit">Attention 基础</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">Dense 悖论：知识容量与计算成本锁死</h2></div>
+  <p class="level-goal">本层目标：理解为什么 Dense 模型「越聪明越费钱」是一个结构性问题。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · Dense 全付 vs MoE 点菜</div>
+    <canvas id="denseCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note">Dense 模型里「懂量子物理的那部分参数」和「懂语法的那部分参数」对每个 token 都同时计算 —— 哪怕这个 token 只是「的」。MoE 的解法：<strong>容量按需点亮</strong>，知识放在参数里不收计算费。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>MoE 模型的「总参数」和「激活参数」分别对应什么成本？</p>
+    <div class="options">
+      <button class="opt">总参数对应计算成本，激活参数对应显存成本</button>
+      <button class="opt">总参数对应显存/部署成本（全要装进显存），激活参数对应计算/推理成本（每 token 只算这些）</button>
+      <button class="opt">两者都只对应计算成本</button>
+    </div>
+    <div class="explain">这是理解一切 MoE 数字的关键：671B 是显存账单，37B 是电费账单。显存贵在「装下」，计算贵在「点亮」。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">Router：每个 token 的点菜员</h2></div>
+  <p class="level-goal">本层目标：动画看懂 token → gate 打分 → top-k 专家 → 加权混合的完整链路。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · Router 动画（点击推进：进入 → 打分 → 分发 → 输出）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="moeBtn" class="opt" style="border:1px solid var(--border)">下一步 → (1/4)</button>
+    </div>
+    <canvas id="routerCanvas" style="width:100%;height:290px"></canvas>
+    <p class="viz-note">8 个 token 各有偏好：代码 token 去代码专家、量子去科学专家。Router（一个小线性层）对每个 token 输出 256 个分数，选 top-8 —— <strong>被选中的专家计算，未选中的零计算</strong>（这就是「稀疏」的含义）。输出 = 8 个专家结果的加权和（权重就是 gate 分数）。</p>
+  </div>
+
+  <div class="formula">
+    y = Σ (gate_i · Expert_i(x)) · gate = softmax(W·x) · 只取 top-k 项
+    <span class="ann">gate 是唯一被全 token 计算的部件（很小）；专家 FFN 只算被点中的 —— 稀疏性全部来源于 top-k 选择</span>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么说「未选中的专家零计算」而不是「零显存」？</p>
+    <div class="options">
+      <button class="opt">计算是按需的（不点不乘矩阵），但显存是静态的（256 个专家的权重全部常驻显存等点）</button>
+      <button class="opt">因为显存可以压缩而计算不能</button>
+      <button class="opt">因为专家权重存在 CPU 上</button>
+    </div>
+    <div class="explain">所以 MoE 省电费不省部署费 —— 单机装不下 671B 时要专家并行（EP），跨卡通信反而成为新瓶颈。容量和算力解耦了，但容量和显存没解耦。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">账本：DeepSeek-V3 的每一笔数字</h2></div>
+  <p class="level-goal">本层目标：会算 MoE 的参数账 —— 从 44M 的单专家到 671B 的总账。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 参数账本（DeepSeek-V3 公开架构）</div>
+    <canvas id="ledgerCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">对照模型：Mixtral 8x7B 总参 46.7B / 激活 12.9B（28%）—— 8×7≠56B 是因为 attention 层 8 个专家共享一份。GPT-4 传闻也是 MoE（8×220B，1.2T 总参），印证了「大模型都走稀疏」的行业共识。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>DeepSeek-V3 激活率 5.5%，为什么推理算力成本约等于一个 37B 的 Dense 模型？</p>
+    <div class="options">
+      <button class="opt">因为专家计算更快</button>
+      <button class="opt">因为大部分参数是冗余的</button>
+      <button class="opt">每 token 每层只过 9 个专家（8 路由 + 1 共享）= 396M 参数，58 层共 23B，加 attention ≈37B —— 计算量只数被点亮的</button>
+    </div>
+    <div class="explain">FLOPs 数的是实际发生的乘法。没点亮的专家权重躺在显存里，一次乘法都不发生 —— 所以「671B 身体，37B 电费」。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">坍缩：MoE 的阿喀琉斯之踵</h2></div>
+  <p class="level-goal">本层目标：理解负载不均的灾难性后果与 aux loss 补救。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 专家坍缩模拟：2000 token 有偏路由的结果</div>
+    <canvas id="collapseCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">不加约束的 gate 天然偏好少数专家：热者愈热 → E0 吃下 48% 的 token（理想 12.5%），其余专家失业退化。<strong>三重灾难</strong>：① 专家能力退化（失业的学不到东西）② 显存失衡（EP 部署时 E0 所在卡爆显存）③ 算力浪费（其他卡空转）。解药 = 辅助损失（aux loss）惩罚不均衡 + DeepSeek-V3 的无 aux loss 偏置调整（每步给负载低的专家加一点分数）。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>aux loss 均衡与「专家专业化」为什么是矛盾的？</p>
+    <div class="options">
+      <button class="opt">不矛盾，两者总是一致</button>
+      <button class="opt">强推均匀 = 逼着代码 token 也去情感专家 —— 均衡损和主任务的损失在拉扯，系数调大模型质量下降</button>
+      <button class="opt">aux loss 只影响速度不影响质量</button>
+    </div>
+    <div class="explain">理想状态是「按需分布的均衡」而不是「绝对均匀」—— 8 个专家各管一类 token。DeepSeek-V3 用动态偏置替代 aux loss 就是为了减少这种拉扯。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：部署真相与生态位</h2></div>
+  <p class="level-goal">本层目标：知道 MoE 部署的关键参数，以及它与其他「多模型」方案的根本区别。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 三种「多模型」方案的生态位</div>
+    <canvas id="positionCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">MoE 是<strong>一个模型内部的容量切分</strong>（专家是器官）；Mostik / SD 是<strong>两个模型之间的协作</strong>（各是独立个体）。前者解决「装更多知识」，后者解决「更便宜地生成」。</p>
+  </div>
+
+  <table>
+    <tr><th>部署要点</th><th>说明</th></tr>
+    <tr><td>显存是第一瓶颈</td><td>671B fp16 ≈ 1.3TB —— 单机放不下，必须多卡（专家并行 EP），量化（fp8/int4）能压到数百 GB</td></tr>
+    <tr><td>EP 通信开销</td><td>token 要被发送到专家所在的卡（all-to-all），卡间带宽决定实际加速比</td></tr>
+    <tr><td>batch 与专家并行度</td><td>batch 越大，每专家分到的 token 越均匀，GPU 效率越高 —— MoE 与 Continuous Batching 天作之合</td></tr>
+    <tr><td>共享专家（V3 设计）</td><td>1 个永远激活的专家承接通用知识，路由专家专注领域 —— 缓解知识重复存储</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>Dense 悖论：知识↑参数↑算力↑ —— MoE 用稀疏激活解耦容量与计算（L1）</li>
+      <li>Router 给每个 token 选 top-k 专家，未选中零计算但零不了显存 —— 671B 是显存账，37B 是电费账（L2）</li>
+      <li>会算账：44M/专家 × 257/层 × 58 层 ≈ 671B；激活 9/257 ≈ 5.5%（L3）</li>
+      <li>坍缩是 MoE 死穴：不加约束 top1 专家吃 48% token —— aux loss / 动态偏置来救（L4）</li>
+      <li>MoE=器官分工（容量），Mostik/SD=个体协作（成本）—— 三者解决不同问题（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>专家 (Expert)</dt><dd>一个独立的 FFN（通常较小，V3 每个仅 44M）。「混合」= 多个专家并联供路由选择。</dd>
+    <dt>Router / Gate</dt><dd>小线性层，为每个 token 对全部专家打分，决定 top-k 激活与加权系数。</dd>
+    <dt>激活参数 (active params)</dt><dd>每个 token 实际计算的参数量 —— MoE 的「电费账单」。</dd>
+    <dt>专家坍缩 (expert collapse)</dt><dd>路由集中到少数专家，其余退化 —— MoE 训练失败的主要形态。</dd>
+    <dt>aux loss（辅助损失）</dt><dd>在训练目标外附加的负载均衡惩罚项；V3 改用无损失的反向偏置。</dd>
+    <dt>专家并行 (EP)</dt><dd>把不同专家放到不同 GPU，token 通过 all-to-all 送到专家处计算。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="mostik.html">Mostik</a>（模型协作另一路 —— 隐态桥接）· <a href="speculative-decoding.html">Speculative Decoding</a>（大小模型猜验证）· <a href="continuous-batching.html">Continuous Batching</a>（MoE 部署的好搭档）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · MoE · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="moe.js"></script>
+</body>
+</html>
