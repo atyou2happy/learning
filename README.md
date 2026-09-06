@@ -35,6 +35,7 @@
 - [Hallucination](topics/hallucination.html) — 模型缺陷 · 幻觉 · 温度实验 + 药柜 + 共存策略（前置：Sampling）
 - [Speculative Decoding](topics/speculative.html) — 推理加速 · 投机解码 · 猜-验证动画 + α 滑块 2-3x（前置：Sampling + KV Cache）
 - [MLA](topics/mla.html) — 推理显存 · 潜在注意力 · KV 压缩 57 倍 + 屠夫账本（前置：KV Cache + Attention）
+- [FFN 键值记忆](topics/ffn.html) — 架构深处 · 知识的实体基础 · 键值检索动画 + ROME 知识编辑模拟器（前置：Attention）
 
 ## 页面结构（五层）
 

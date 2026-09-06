@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FFN — 键值记忆：模型的知识存在哪里</title>
+<meta name="description" content="FFN 键值记忆：占 Transformer 2/3 参数的方块其实是记忆仓库。Geva 2021 键值视角、稀疏键激活、ROME/MEMIT 知识编辑、LLM=检索系统的统一图景，与 MoE/LoRA/幻觉页互链。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 藏宝图</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 拆盒</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 验尸</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 插卡</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 世界观</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>FFN</div>
+    <div class="topic-kicker">架构深处 · 知识的实体基础</div>
+    <h1 class="topic-title">FFN 键值记忆</h1>
+    <p class="topic-sub"><a href="attention.html">Attention 页</a>拆过 Q/K/V，<a href="moe.html">MoE 页</a>换过 FFN，但每层<strong>占 2/3 参数的 FFN 方块从没打开过盖子</strong>。Geva et al. 2021 给出的视角：FFN(x) = f(x·K)·V —— 第一层矩阵是<strong>键</strong>（模式探测器），第二层是<strong>值</strong>（记忆内容），每个 token 只稀疏激活几个键，读出对应记忆写进残差流。原来 <strong>MLP 存知识、Attention 做路由</strong> —— 幻觉、LoRA、MoE 三页欠的「实体基础」在这一页还账。</p>
+    <div class="topic-meta">
+      <span class="tag">键值检索动画</span>
+      <span class="tag">知识编辑模拟器</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="attention.html" style="color:inherit">Attention</a> · <a href="kv-cache.html" style="color:inherit">KV Cache</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">藏宝图：参数都在哪里</h2></div>
+  <p class="level-goal">本层目标：看清「模型知道的东西」大部分藏在一个没人讲的方块里。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 每层参数分布（d=4096 实算）</div>
+    <canvas id="pieCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">每层：Attention 4d² = 67.1M（33%），FFN 8d² = 134.2M（<strong>67%</strong>）。真实模型对账：Llama-3-8B 每层 FFN 占 <strong>69.2%</strong>，全模型摊上嵌入仍占 <strong>64.4%</strong>。MoE 页说「换 FFN 不换 Attention」的原因现在有了数字版：动那 67% 才动得动大头。<strong>注意力负责「看谁」，这 2/3 负责「知道什么」。</strong></p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么 MoE 只把 FFN 拆成专家、Attention 原样保留？</p>
+    <div class="options">
+      <button class="opt">Attention 计算量更大</button>
+      <button class="opt">FFN 占每层 2/3 参数、存的是可分片的知识；Attention 的 Q/K/V 路由是所有 token 共用的通信结构，拆了路由整个网络失明</button>
+      <button class="opt">Attention 是后来加上的模块</button>
+    </div>
+    <div class="explain">「信息路由比特征变换更难稀疏化」—— Attention 页埋的这句话，答案就是 L1 这张饼图。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">拆盒：FFN 是一张记忆表</h2></div>
+  <p class="level-goal">本层目标：看懂「检索」三步。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 键值检索动画（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="stepBtn" class="opt" style="border:1px solid var(--border)">下一步 →</button>
+      <button id="resetBtn" class="opt" style="border:1px solid var(--border)">重置</button>
+    </div>
+    <canvas id="kvCanvas" style="width:100%;height:300px"></canvas>
+    <p class="viz-note">Geva et al. 2021《Transformer FFN Layers are Key-Value Memories》的视角：<strong>FFN(x) = f(x·K)·V</strong>。K 的每一行是一个模式探测器（「地理上下文」「首都模板」「形容词槽位」），V 的对应行是它写出的记忆（把 France 的 logit 抬 +2）。图里 6 个键中只有 <strong>3 个亮起</strong>（激活值 1.95 / 0.93 / 0.84，其余 &lt;0.3）—— 每个输入只查这张大表的稀疏几行，top-2 键占了 70% 的激活量。<strong>低层键匹配表面模式、高层键匹配语义</strong> —— 越往上，键越「懂」。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>FFN 的「键」和 Attention 的「K 投影」是什么关系？</p>
+    <div class="options">
+      <button class="opt">同一个东西，两处复用</button>
+      <button class="opt">FFN 的键是可学习的参数矩阵，Attention 的 K 是对 token 的动态投影</button>
+      <button class="opt">完全无关的巧合</button>
+    </div>
+    <div class="explain">两个「键」都在做「查询-匹配」：Attention 的 K 每个 token 现算、跨 token 匹配；FFN 的 K 是训练好就冻结的模式库、对残差流匹配。前者路由信息，后者检索记忆。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">验尸：改一行记忆会发生什么</h2></div>
+  <p class="level-goal">本层目标：亲手做一次「知识手术」，看到翻盘也看到副作用。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 知识编辑模拟器（点按钮执行手术）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="editBtn" class="opt" style="border:1px solid var(--border)">执行编辑 →</button>
+      <button id="undoBtn" class="opt" style="border:1px solid var(--border)">撤销</button>
+    </div>
+    <canvas id="editCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note">ROME（Meng et al. 2022）用因果追踪把「巴黎→法国首都」这类事实定位到<strong>中游层的 MLP、主语最后一个 token 的位置</strong>，再做 rank-one 更新改写那张记忆表。模拟器复现全程：改 1 个值 P(France) 只从 98.3% 掉到 78.8% —— 一个事实存在多个键里；改 2 个值彻底翻转 <strong>98.3% → 0.3%</strong>；但同一个「地理键」也在别的地理题里点火 —— 别处 Germany 概率被抬到 <strong>98.2%</strong>，手术出血了。MEMIT（2023）把这套手术扩到<strong>上千条事实</strong>，代价始终是：改记忆不是打补丁，是器官移植。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么把「The capital of France is __」的答案改成 Germany 后，别的地理题也开始答 Germany？</p>
+    <div class="options">
+      <button class="opt">知识不是一条条独立记录，而是共享键上的分布记忆 —— 改「地理上下文」这个键写的值，所有经过该键的查询都被改写</button>
+      <button class="opt">编辑工具的 bug，工程问题可以修掉</button>
+      <button class="opt">因为 Germany 和 France 都是国名，词向量太近</button>
+    </div>
+    <div class="explain">正是分布表示的本质副作用：叠加共享带来压缩红利，代价是一处修改处处泛化。RLHF 页的「按住葫芦浮起瓢」在参数空间又演了一遍。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">插卡：LoRA 与 MoE 的键值重读</h2></div>
+  <p class="level-goal">本层目标：两页旧知识一次返场。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 三种「改这张表」的方式</div>
+    <canvas id="cardCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note"><strong>LoRA</strong>：冻结整张表，外挂 W=BA 低秩小卡片学新行为 ——「LoRA 学不会新知识，那是 RAG 的活」的实体原因：新卡片容量 r 那么小，装不下一条新记忆的全部键位。<strong>MoE</strong>：知识太多一张表放不下 → 拆成 257 张分库存放、按需路由 —— 本页的单层键值拆解正是它的微缩版。<strong>全参微调</strong>：直接重写整张表 —— 最贵、最彻底、也最容易把旧记忆写花（灾难性遗忘）。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>LoRA 微调后模型学会了一种新的问答风格，但答事实题还是会编 —— 键值视角怎么说？</p>
+    <div class="options">
+      <button class="opt">LoRA 学习率太低了</button>
+      <button class="opt">事实题需要更多训练轮数</button>
+      <button class="opt">风格是许多键上的小幅通用偏置（低秩卡片装得下），事实是具体键值对（要精确改写记忆行 —— 低秩插卡干不了器官移植的活）</button>
+    </div>
+    <div class="explain">LoRA 页的结论「RAG 管知识、LoRA 管行为」在这里有了机制版解释 —— 两页互为印证。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">世界观：LLM 是一台检索系统</h2></div>
+  <p class="level-goal">本层目标：把四个已上线主题收进一张图。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 训练=写入 · 推理=查询 · 微调=改卡 · 幻觉=检索失误</div>
+    <canvas id="worldCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">同一个 FFN，四个视角：<strong>预训练</strong>把互联网压进 67% 的参数（写入）；<strong>推理</strong>时每个 token 做一次稀疏键值查询（Attention 路由到哪，FFN 就从哪读）；<strong>LoRA/ROME</strong> 是两种粒度的改卡；<strong>幻觉</strong> = 键匹配糊了、读出一段格式完美内容错误的记忆 —— 「语言无破绽、事实塌方」的实体基础。模型不是数据库，但它的知识确实存在可定位、可编辑、也会检索失误的物理结构里。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>「LLM 幻觉是随机噪声，大模型会自然消失」—— 键值视角怎么反驳？</p>
+    <div class="options">
+      <button class="opt">幻觉确实是随机噪声</button>
+      <button class="opt">幻觉是检索机制的固有失效模式：键空间里「查无此键」时模型仍会读出最邻近的记忆并流畅输出 —— 这是结构属性，模型变大只会让「检索错误」更流畅更自信</button>
+      <button class="opt">把温度调到 0 就能消除</button>
+    </div>
+    <div class="explain">幻觉页说「创造力与编造共享机制」，这一页给出了实体：都是那张键值表。压制一个必伤另一个。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>FFN 占每层 2/3 参数（Llama-3-8B 全模型 64.4%）—— 知识的主体在这（L1）</li>
+      <li>FFN(x) = f(x·K)·V：键=模式探测器、值=记忆内容、激活稀疏（L2）</li>
+      <li>ROME 改 2 个值可翻转一条事实（98.3%→0.3%），但必出血到邻近查询（98.2%）（L3）</li>
+      <li>LoRA=插低秩小卡、MoE=分库存放、全参=重写全表 —— 三种改表粒度（L4）</li>
+      <li>训练=写入、推理=查询、微调=改卡、幻觉=检索失误 —— LLM 是检索系统（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>FFN (Feed-Forward Network)</dt><dd>前馈网络 —— 逐位置的两层 MLP：升维→非线性→降维。Geva 视角下 = 键值记忆表。</dd>
+    <dt>键 (Key, FFN 语境)</dt><dd>第一层矩阵的行 —— 训练出来的模式探测器，与残差流做匹配。</dd>
+    <dt>值 (Value, FFN 语境)</dt><dd>第二层矩阵的对应行 —— 该键命中后写进残差流的记忆增量。</dd>
+    <dt>键值记忆 (key-value memory)</dt><dd>Geva et al. 2021 论文标题的论点：FFN 层在功能上是神经网络式的联想记忆。</dd>
+    <dt>ROME (Rank-One Model Editing)</dt><dd>Meng et al. 2022 的知识编辑方法 —— 定位中游 MLP 做 rank-one 更新改写单条事实。</dd>
+    <dt>MEMIT</dt><dd>Mass-Editing Memory in a Transformer —— ROME 作者 2023 年的扩展，一次编辑上千条事实。</dd>
+    <dt>知识神经元 (Knowledge Neurons)</dt><dd>Dai et al. 2021 —— 与事实关联的单个 FFN 中间神经元。</dd>
+    <dt>因果追踪 (causal tracing)</dt><dd>ROME 的定位手段 —— 扰动+恢复，找出携带事实的关键层/位置。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="attention.html">Attention</a>（路由 vs 记忆的另一半）· <a href="moe.html">MoE</a>（记忆分库存放）· <a href="lora.html">LoRA</a>（低秩插卡）· <a href="hallucination.html">幻觉</a>（检索失误的失效模式）· <a href="rag.html">RAG</a>（外部检索补知识）· <a href="pretraining.html">Pretraining</a>（写入过程）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · FFN · 图解版 · 知识的实体基础</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="ffn.js"></script>
+</body>
+</html>
