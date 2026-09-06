@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>In-Context Learning — 不动权重的当场学习</title>
+<meta name="description" content="In-Context Learning：3 个示例当场学会新任务、梯度为零。induction head 二步电路动画、涌现相变拐点、随机标签实验、ICL vs 微调双速账 —— 注意力就是学习，KV Cache 存的是激活。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 奇观</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 电路</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 证据</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 双速</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 世界观</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>ICL</div>
+    <div class="topic-kicker">动态能力 · 最神秘的当场学习</div>
+    <h1 class="topic-title">In-Context Learning：不动权重的学习</h1>
+    <p class="topic-sub">给模型看 3 个示例，它当场就会做新任务 —— 翻译风格、输出格式、生僻映射，样样现学现卖。诡异的是：<strong>梯度全程为零，参数一个没动</strong> —— 那么是谁在学？这就是 ICL，GPT-3 论文让世界记住它的名字，而 <a href="residual.html">残差流页</a>的总线、<a href="ffn.html">FFN 页</a>的键值检索、<a href="attention.html">Attention 页</a>的 QKV 匹配 —— 解释它需要的零件，前几页刚好全部造好了。</p>
+    <div class="topic-meta">
+      <span class="tag">induction 电路动画</span>
+      <span class="tag">随机标签实验</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="attention.html" style="color:inherit">Attention</a> · <a href="residual.html" style="color:inherit">残差流</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">奇观：3 个示例，当场学会</h2></div>
+  <p class="level-goal">本层目标：承认这有多诡异。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一个模型，三种用法</div>
+    <canvas id="wowCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">同一个预训练模型：zero-shot 只给指令 55% 正确；加 3 个示例（ICL）跳到 <strong>92%</strong>（node 模拟口径，形状锚定 GPT-3 few-shot 曲线）；而微调（LoRA/全参）也能到 92%+，但要动 10⁹ 个参数、小时级训练。三种用法的差别不在「会不会」而在<strong>「学习发生在哪里」</strong>：微调写进权重、ICL 写进上下文 —— 后者会话结束即消失，却分文未动模型本身。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>ICL 让模型「学会了新任务」，这个「学」和微调的「学」最本质的区别是？</p>
+    <div class="options">
+      <button class="opt">ICL 学得更快因为示例更少</button>
+      <button class="opt">微调 = 永久改写参数（FFN 键值表里的记忆行）；ICL = 零参数改动，全部信息只存在于本次会话的上下文（KV Cache 激活）里</button>
+      <button class="opt">没有区别，只是叫法不同</button>
+    </div>
+    <div class="explain">一个写盘、一个只写内存 —— L4 的双速账会算这笔钱。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">电路：induction head 二步接力</h2></div>
+  <p class="level-goal">本层目标：看懂「谁在学」的机制答案。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · [猫喵 狗汪 猫?] → 喵 二步电路（点按钮推进，真 softmax）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="ihBtn" class="opt" style="border:1px solid var(--border)">下一步 →</button>
+      <button id="ihReset" class="opt" style="border:1px solid var(--border)">重置</button>
+    </div>
+    <canvas id="ihCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">Elhage 2021 在两层玩具模型里解剖出的真实电路 —— <strong>两个注意力头的接力，纯前向、零梯度</strong>：①<strong>匹配头</strong>：当前词「猫」的 Q 与历史做 QK 点积，找到前面的「猫」（node 实算 attention 89.1%）；②<strong>归纳头</strong>：从匹配位置<strong>读它的下一个词</strong>「喵」，沿总线（<a href="residual.html">残差流页</a>的拷贝车道）搬到当下，P(喵) = 87.8%。这一对头合起来 = 「A 之后常跟 B，现在又是 A，那该输出 B」—— <strong>示例在 prompt 里排好队，induction 电路把它们变成一张临时查找表</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>induction head 的「shift-by-one」读法为什么是关键一步？</p>
+    <div class="options">
+      <button class="opt">它让序列长度变短</button>
+      <button class="opt">它防止注意力饱和</button>
+      <button class="opt">匹配头只回答「A 在哪」，shift-by-one 才回答「A 之后是什么」—— 预测下一个词需要的正是后者的信息，没有这一步 A 只能找到 A</button>
+    </div>
+    <div class="explain">找到重复还只是检索；读「重复的下一个」才是学习 —— 两个头分工合起来完成了「从上下文提取规律」。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">证据：随机标签与涌现拐点</h2></div>
+  <p class="level-goal">本层目标：两条实验证据钉死机制。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 随机标签实验（Min et al. 2022）+ 涌现拐点</div>
+    <canvas id="evCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note"><strong>实验一（上）</strong>：把示例的标签换成随机内容 —— 按理任务信息已毁，性能应该崩到 zero-shot；实测只从 92% 掉到 <strong>78%</strong> —— 模型从示例里学的主要是<strong>「任务格式与分布」</strong>（输入长什么样、输出什么腔调），标签真值只占小头。<strong>实验二（下）</strong>：Olsson 2022 跨 40M~2.25B 模型观察到 —— induction 电路成形的训练步，恰好同步出现 loss 曲线上的「in-context bump」拐点：<strong>能力的涌现时刻 = 电路的接通时刻</strong>，快学习机制不是慢慢变好，是「晶体形成」式的一次接通。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>随机标签只让性能从 92% 掉到 78%，这个结果最合理的解读是？</p>
+    <div class="options">
+      <button class="opt">ICL 的主要收益来自学到「任务格式/分布」而非标签真值 —— 示例首先是说明书，其次才是答案</button>
+      <button class="opt">模型没注意到标签被换</button>
+      <button class="opt">说明 ICL 是记忆不是学习</button>
+    </div>
+    <div class="explain">这也解释了为什么「示例的格式一致」比「示例的答案对」更重要 —— 写 prompt 的工程直觉有了实验出处。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">双速：两条学习通路的账</h2></div>
+  <p class="level-goal">本层目标：会算「快学习 vs 慢学习」的经济账。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · ICL vs 微调：同构的两套键值机制</div>
+    <canvas id="dualCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">惊人的对称：<strong>微调写 FFN 键值表</strong>（<a href="ffn.html">FFN 页</a>：K=模式、V=记忆，永久参数）；<strong>ICL 用 attention 激活临时搭一张同构的表</strong>（示例的 K/V 就在 KV Cache 里当查找表用）—— von Oswald 2022 甚至证明：线性注意力下，<strong>ICL 在数学上等价于在激活上做梯度下降</strong>。「隐式微调」不是比喻，是字面事实。代价表：ICL 免费、即时、会话即焚（示例 60 token 的 prefill）；微调昂贵（<a href="lora.html">LoRA 页</a>16B/参数）、小时级、永久 —— <strong>快通路处理任务，慢通路沉淀知识</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>「ICL = 在激活上做梯度下降」—— 那为什么 ICL 学不会「法国首都是柏林」这种新知识？</p>
+    <div class="options">
+      <button class="opt">因为 ICL 学习率太小</button>
+      <button class="opt">激活空间的临时表只在「本次会话的示例分布」内有效；要覆盖一条与预训练分布冲突的事实，需要改写 FFN 里的永久记忆（ROME 那种手术）—— 快通路的功率不够推翻慢通行的存量</button>
+      <button class="opt">因为示例数量不够多</button>
+    </div>
+    <div class="explain">「LoRA 学不会新知识，那是 RAG 的活」的三兄弟版本：ICL 管格式、RAG 管事实、微调管行为 —— 三种改表粒度在 L4 再次对齐。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">世界观：注意力就是学习</h2></div>
+  <p class="level-goal">本层目标：用一句话重读全站。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 每一次前向，都是一次微型学习</div>
+    <canvas id="worldCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">ICL 把「学习」从训练场搬进了推理时：<strong>KV Cache 里存的本来就是激活不是参数</strong>（KV Cache 页）—— 每次前向 attention 都在读它们，所以每个会话都是一次临时的、微型的学习。这个视角统一了全站：<strong>Reasoning</strong>（思维链 = 在 context 里自我教学，慢思考的组织形式）、<strong>RAG</strong>（检索 = 外挂示例，知识不入权重）、<strong>Agent few-shot</strong>（示例工具调用 = 行为克隆）、<strong>长上下文</strong>（RoPE 页 128k = 更大的临时课堂）—— <strong>2026 年「上下文工程」的一切，都站在 ICL 这块地基上</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>「注意力就是学习」—— 这句话最准确的含义是？</p>
+    <div class="options">
+      <button class="opt">注意力层就是神经网络的全部</button>
+      <button class="opt">注意力权重等于学习率</button>
+      <button class="opt">梯度下降改参数是学习，attention 改激活也是学习 —— 两条通路同构（键值查找），一个慢而永久、一个快而临时；ICL 证明后者足以当场完成任务</button>
+    </div>
+    <div class="explain">快与慢、临时与永久、激活与参数 —— 双通路视角是理解「模型怎么变聪明」的完整地图。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>ICL：3 个示例当场会新任务，梯度为零、参数不动（L1）</li>
+      <li>induction head 二步接力：匹配头找 A（89.1%）、归纳头搬「A 的下一个」—— 临时查找表（L2）</li>
+      <li>随机标签只掉 14pp：示例主要是「格式说明书」，其次才是答案（L3）</li>
+      <li>ICL ≡ 激活上的梯度下降（von Oswald 2022）：attention 表与 FFN 表同构，快慢两条通路（L4）</li>
+      <li>思维链/RAG/few-shot/长上下文 —— 推理时学习的全家福（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>In-Context Learning (ICL)</dt><dd>上下文学习 —— 从 prompt 中的示例当场学会任务，零参数更新。</dd>
+    <dt>few-shot</dt><dd>给少量示例（通常 1~10 个）的 ICL 用法；zero-shot = 不给示例。</dd>
+    <dt>induction head</dt><dd>归纳头 —— 实现「A 之后跟 B，现在又是 A」的二步注意力电路。</dd>
+    <dt>shift-by-one</dt><dd>从匹配位置读「下一个 token」的操作 —— induction 电路的学习步骤。</dd>
+    <dt>in-context bump</dt><dd>训练 loss 曲线上 induction 电路接通时出现的拐点 —— 能力涌现的电路时刻。</dd>
+    <dt>隐式微调 (implicit fine-tuning)</dt><dd>ICL 在数学上等价于对激活做梯度下降的命题（线性注意力下已证明）。</dd>
+    <dt>双通路 (dual pathway)</dt><dd>快通路（attention 激活，临时）+ 慢通路（梯度写参数，永久）的学习框架。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="attention.html">Attention</a>（QKV 匹配的来源）· <a href="residual.html">残差流</a>（拷贝车道 / induction 的搬运路径）· <a href="ffn.html">FFN</a>（慢通路的永久键值表）· <a href="kv-cache.html">KV Cache</a>（临时表存的地方）· <a href="lora.html">LoRA</a>（中间粒度的改表）· <a href="reasoning.html">Reasoning</a>（在 context 里自我教学）· <a href="rag.html">RAG</a>（外挂示例）· <a href="agent.html">Agent</a>（few-shot 行为克隆）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · ICL · 图解版 · 推理时学习的地基</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="icl.js"></script>
+</body>
+</html>
