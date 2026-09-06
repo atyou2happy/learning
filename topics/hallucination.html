@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hallucination — 模型为什么一本正经地胡说</title>
+<meta name="description" content="大模型幻觉：补全机器 vs 检索机器的根因、温度不解决幻觉的数学、RLHF 偏好自信的推手、RAG/工具/校准的药柜、不能根除只能管理的共存策略。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 众生相</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 根因</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 温度</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 药柜</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 共存</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Hallucination</div>
+    <div class="topic-kicker">模型缺陷 · 能力叙事的另一面</div>
+    <h1 class="topic-title">Hallucination 幻觉</h1>
+    <p class="topic-sub">全站 27 页讲模型多能干，这页讲它怎么出错 —— 编造的论文引用格式完美、不存在的 API 参数说明详尽、张冠李戴的年份理直气壮。根因是架构级的：<strong>模型是补全机器不是检索机器，训练目标里「像不像」有梯度、「真不真」不存在</strong>。更微妙的是：创造力和幻觉共享同一个机制 —— 这是一枚硬币的两面，不是可以单独拆掉的 bug。</p>
+    <div class="topic-meta">
+      <span class="tag">温度滑块实验</span>
+      <span class="tag">药柜对照</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="sampling.html" style="color:inherit">Sampling</a> · <a href="pretraining.html" style="color:inherit">Pretraining</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">众生相：三个真实形态</h2></div>
+  <p class="level-goal">本层目标：认识幻觉的典型样貌与共同点。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 一本正经地胡说</div>
+    <canvas id="zooCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">虚构引用（Smith et al. 2023 —— 论文不存在但格式无懈可击）、编造 API（函数不存在但文档详尽）、张冠李戴（1892 安到 1887 —— <strong>半真半假最难察觉</strong>）。共同点：语言层面毫无破绽、事实层面完全塌方 —— 因为模型优化的就是语言层面的分数。2023 年律师引用虚构判例被法院制裁是真实事故：流畅 ≠ 可信。</p>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">根因：补全机器 vs 检索机器</h2></div>
+  <p class="level-goal">本层目标：理解幻觉为什么是架构级而不是 bug。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 两种机器</div>
+    <canvas id="rootCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">数据库查询要么有要么没有；语言模型<strong>总有答案</strong> —— 因为它的任务就是给出「最像的续写」。<a href="pretraining.html">Pretraining 页</a>讲过训练目标：下一个词的交叉熵 —— 这个损失函数里没有任何一项在检查「事实是否为真」。RLHF 再加一刀：奖励模型偏好自信流畅的回答，<strong>「我不确定」被系统性压制</strong>，模型学会不确定时也演确定。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么说「幻觉是特性的另一面」而不是单纯的 bug？</p>
+    <div class="options">
+      <button class="opt">因为工程师修不完</button>
+      <button class="opt">因为成本太高</button>
+      <button class="opt">创造与编造共享同一机制：模型把远距离概念组合成新东西（创造力）和组合出不存在的引用（幻觉）用的是同一套补全能力 — 压制一个必然伤另一个</button>
+    </div>
+    <div class="explain">这是为什么「消除幻觉」是不现实的目标：你只能决定把它用在哪儿，不能把它从模型里摘出来。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">温度：一个流行误解的数学</h2></div>
+  <p class="level-goal">本层目标：亲手验证「调低温度」不解决幻觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 温度 vs 幻觉（拖温度滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="hTempSlider" min="0.05" max="1.5" step="0.05" value="1" style="flex:1">
+      <span id="hTempLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:80px">T = 1.00</span>
+    </div>
+    <canvas id="tempCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">把温度拖到 0.05：错误答案「1887年」的尖峰反而更坚定（35%→95%）—— <strong>温度管「怎么抽」，不管「抽得对不对」</strong>。系统性幻觉（分布的尖峰本身是错的）对温度免疫；温度只能减少「随机性幻觉」（采样抖出来的错）。这与 <a href="sampling.html">Sampling 页</a>的温度语义完全一致：T→0 = argmax，而 argmax 选错时就是最自信的错。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">药柜：各药各治什么</h2></div>
+  <p class="level-goal">本层目标：建立「对症下药」的工具选择反射。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 五味药</div>
+    <canvas id="cureCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note"><a href="rag.html">RAG</a> 最强主力：把「回忆」变「查询」—— 生成前先取回真实文档，引用可溯源；工具调用（<a href="gpt6.html">GPT-6</a> computer use）让搜索代替记忆；校准允许说不知道（拒答率换准确率的 trade-off）；温度调低只治随机性；更强模型（<a href="scaling.html">Scaling Laws</a>）参数里装了更多真事实，降低但不归零。<strong>组合拳是常态</strong>：RAG 打底 + 工具核证 + 校准兜底。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">共存：不能根除只能管理</h2></div>
+  <p class="level-goal">本层目标：形成按场景分配信任的决策反射。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 按场景分配信任</div>
+    <canvas id="coexistCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">查得着的交给 RAG/搜索；要准确数字的交给工具/代码执行；创作头脑风暴放心用 —— <strong>幻觉在这里叫灵感</strong>；关键决策必须人审 —— AI 做草稿，人做终审。实测锚点：SimpleQA 长尾事实上旗舰模型准确率也常 &lt;60% —— 越冷门的事实越容易塌。<strong>正确姿势不是「别用」而是「知道哪里会塌」</strong> —— 这页与全站 27 页能力叙事互补成完整世界观。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>幻觉三形态：虚构引用/编造 API/张冠李戴 —— 语言无破绽、事实塌方（L1）</li>
+      <li>根因架构级：训练目标只有「像不像」没有「真不真」；RLHF 还压制「不知道」（L2）</li>
+      <li>创造与编造同一机制 —— 摘不掉的硬币两面（L2）</li>
+      <li>温度不治幻觉：尖峰若是错的，T→0 越发坚定地错（L3）</li>
+      <li>药柜组合拳：RAG 主力 + 工具核证 + 校准兜底；按场景分配信任（L4/L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>hallucination (幻觉)</dt><dd>模型生成流畅自信但事实错误的内容 —— 补全机制的副产品。</dd>
+    <dt>系统性 vs 随机性幻觉</dt><dd>分布尖峰本身错（argmax 也错）vs 采样抖出来的错 —— 温度只治后者。</dd>
+    <dt>confabulation (虚构)</dt><dd>更准确的学名 —— 填补记忆空白的合理化编造，与人类记忆缺陷同构。</dd>
+    <dt>grounding (接地)</dt><dd>让生成基于取回的真实文档 —— RAG 的核心思想。</dd>
+    <dt>校准 (calibration)</dt><dd>模型的置信度与真实正确率对齐 —— 允许「不知道」才能诚实。</dd>
+    <dt>SimpleQA / FactScore</dt><dd>幻觉量化基准 —— 长尾问答准确率 / 传记原子事实分解。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="sampling.html">Sampling</a>（温度语义的来源页）· <a href="rag.html">RAG</a>（最强缓解药）· <a href="pretraining.html">Pretraining</a>（根因的训练目标）· <a href="rlhf.html">RLHF</a>（自信偏好的推手）· <a href="gpt6.html">GPT-6</a>（工具核证路线）· <a href="scaling.html">Scaling Laws</a>（更大≠无幻觉）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Hallucination · 图解版 · 能力叙事的另一面</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="hallucination.js"></script>
+</body>
+</html>

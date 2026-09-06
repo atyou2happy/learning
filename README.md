@@ -32,6 +32,7 @@
 - [Scaling Laws](topics/scaling.html) — 训练理论 · 缩放定律 · Kaplan→Chinchilla→Llama3 三幕剧 + 算力计算器（前置：Pretraining）
 - [RoPE](topics/rope.html) — 模型架构 · 位置编码 · 旋转星图 + 128k 外推续命（前置：Attention）
 - [MCP](topics/mcp.html) — Agent 基础设施 · 开放协议 · M×N→M+N + 协议四步动画（前置：Agent）
+- [Hallucination](topics/hallucination.html) — 模型缺陷 · 幻觉 · 温度实验 + 药柜 + 共存策略（前置：Sampling）
 
 ## 页面结构（五层）
 
