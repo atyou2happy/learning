@@ -31,6 +31,7 @@
 - [Roofline](topics/roofline.html) — 系统底层 · 性能物理学 · 全站技巧一条曲线收拢（前置：FlashAttention）
 - [Scaling Laws](topics/scaling.html) — 训练理论 · 缩放定律 · Kaplan→Chinchilla→Llama3 三幕剧 + 算力计算器（前置：Pretraining）
 - [RoPE](topics/rope.html) — 模型架构 · 位置编码 · 旋转星图 + 128k 外推续命（前置：Attention）
+- [MCP](topics/mcp.html) — Agent 基础设施 · 开放协议 · M×N→M+N + 协议四步动画（前置：Agent）
 
 ## 页面结构（五层）
 

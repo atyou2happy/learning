@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP — AI 的 USB-C</title>
+<meta name="description" content="Model Context Protocol：M×N 集成地狱变 M+N 总线、协议三步（discover/tools list/call）、三原语 tools/resources/prompts、传输层 stdio 与 Streamable HTTP、2026 生态与安全双刃剑。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 死结</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 总线</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 协议</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 循环</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 生态</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>MCP</div>
+    <div class="topic-kicker">Agent 基础设施 · 开放协议</div>
+    <h1 class="topic-title">MCP 协议</h1>
+    <p class="topic-sub"><a href="agent.html">Agent 页</a>讲了「会用工具的模型」，这页讲<strong>工具是怎么接上去的</strong>。M 个模型 × N 个工具 = M×N 份胶水代码的地狱，被一层开放协议解成 M+N —— 和 USB-C 干的是同一件事：谁都不为谁定制，都只为协议实现。2024-11 Anthropic 开源，2025 OpenAI/Google 跟进，2026 已成事实标准。你每天用的 AI 应用，架构图就是这页。</p>
+    <div class="topic-meta">
+      <span class="tag">总线对比图</span>
+      <span class="tag">协议四步动画</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="agent.html" style="color:inherit">Agent</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">死结：M×N 集成地狱</h2></div>
+  <p class="level-goal">本层目标：感受没有协议时的连接爆炸。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 5 个模型 × 8 个工具</div>
+    <canvas id="meshCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">每个模型要接每个工具：5×8=40 份定制胶水。规模到 20 模型 × 50 工具就是 <strong>1000 份</strong>。更痛的是边际成本：每出一个新模型，要重写全部 N 个集成；每出一个新工具，全部 M 个应用各改一遍 —— 集成工作量随生态平方级增长，这是 2024 之前 agent 开发的真实痛感。</p>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">总线：M+N 的 USB-C 魔法</h2></div>
+  <p class="level-goal">本层目标：理解「为协议实现」如何把平方降为线性。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · MCP 居中，各连一边</div>
+    <canvas id="busCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">模型侧实现一次 client，工具侧实现一次 server —— <strong>5+8=13 份，省 68%；20×50 规模省 93%</strong>。边际成本也崩了：新模型只需 1 份 client（全部服务器零改动），新工具只需 1 份 server（全部模型立刻可用）。这就是 USB-C 的思想：安卓苹果耳机显示器谁都不为谁定制 —— 插座统一了，世界就通了。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么「标准协议」通常由行业共同维护而不是某家私有 API？</p>
+    <div class="options">
+      <button class="opt">私有 API 性能差</button>
+      <button class="opt">M+N 的收益依赖「全体采用同一标准」—— 私有 API 只能形成自己的小 M×N 岛；开放标准让网络效应属于整个生态，竞争回到工具质量本身</button>
+      <button class="opt">因为协议免费</button>
+    </div>
+    <div class="explain">USB、HTTP、以太网的历史一再重演：协议赢得生态，生态赢得时代。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">协议：四步接线</h2></div>
+  <p class="level-goal">本层目标：点按钮走完 discover → list → prompt → call。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 协议四步（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="mcpBtn" class="opt" style="border:1px solid var(--border)">下一步 → (1/4)</button>
+    </div>
+    <canvas id="protoCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">底层是 <strong>JSON-RPC 2.0</strong>：① <code>server/discover</code> 摸清版本与能力（2026-07-28 版起协议<strong>无状态化</strong>——每个请求自带 _meta，发现结果可缓存）② <code>tools/list</code> 返回工具卡：name + description + <strong>inputSchema（JSON Schema）</strong> ③ host 把工具卡塞进 system prompt —— 这就是模型「看到的」toolbox ④ 模型吐 tool_call → host 路由执行 → 结果回填对话。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 三原语 + 一个反向</div>
+    <canvas id="primCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">Server 能给三样：<strong>Tools</strong>（执行动作）、<strong>Resources</strong>（读数据）、<strong>Prompts</strong>（模板）。Client 反向给一样：<strong>Elicitation</strong>（server 问用户「确认删除？」—— 危险动作的人肉刹车）。2026-07-28 版已废弃 sampling（server 反向借 LLM）—— 新实现直接调 LLM API，协议回归纯粹的「上下文管道」。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">循环：你每天在用的架构</h2></div>
+  <p class="level-goal">本层目标：把 MCP 映射到自己每天用的 AI 应用上。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · Host / Client / Server 实景</div>
+    <canvas id="hermesCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">AI 应用是 <strong>Host</strong>：每连一个 server 生成一个专属 client（连接隔离）。本地工具（terminal、文件、浏览器）走 <strong>stdio</strong> —— 进程管道、零网络开销；远程服务（GitHub、搜索、数据库）走 <strong>Streamable HTTP</strong> + OAuth。工具调用循环（模型吐 call → 执行 → 回填 → 继续）就是 <a href="agent.html">Agent 页</a>ReAct 循环的协议层实现 —— <strong>概念页讲思想，这页讲管道</strong>。</p>
+  </div>
+
+  <div class="formula">
+    数据层 (JSON-RPC 2.0 + 原语) + 传输层 (stdio 本地 / Streamable HTTP 远程)
+    <span class="ann">两层分离 = 同一套消息格式跑在任何传输上 — 与 HTTP 之于 TCP 的分层思想同源</span>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">生态：事实标准与双刃剑</h2></div>
+  <p class="level-goal">本层目标：知道 2026 的格局与新的攻击面。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 时间线 + 安全清单</div>
+    <canvas id="ecoCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">2024-11 Anthropic 开源 → 2025-03 OpenAI 支持（放弃自家 Function Calling 孤岛）→ 2025-04 Google 跟进 → 2026 数千个 server 的生态。反面：<strong>攻击面也标准化了</strong> —— 工具描述里藏指令（提示注入）、恶意 server 借模型之手（混淆代理）、假确认框钓鱼。缓解三板斧：最小权限、工具白名单、高危操作人工确认。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>M×N 集成地狱 → M+N 总线：USB-C 思想，规模越大省得越多（93%）（L1/L2）</li>
+      <li>JSON-RPC 四步：discover → tools/list → 塞 prompt → tools/call（L3）</li>
+      <li>三原语：Tools 执行 / Resources 读数 / Prompts 模板 + 反向 Elicitation（L3）</li>
+      <li>两层架构：数据层协议 + 传输层（stdio 本地 / HTTP 远程）（L4）</li>
+      <li>2026 事实标准，但攻击面也标准化 — 最小权限是纪律（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>MCP Host / Client / Server</dt><dd>AI 应用（协调者）/ 每 server 一个的连接器 / 提供上下文与工具的程序。</dd>
+    <dt>JSON-RPC 2.0</dt><dd>MCP 的消息格式 —— 请求/响应/通知的标准信封。</dd>
+    <dt>inputSchema</dt><dd>工具的 JSON Schema 参数声明 —— 模型与 server 之间的合同。</dd>
+    <dt>stdio 传输</dt><dd>本地进程间管道 —— 零网络开销，本地工具首选。</dd>
+    <dt>Streamable HTTP</dt><dd>远程传输 —— HTTP POST + SSE 流，支持 OAuth 认证。</dd>
+    <dt>Elicitation</dt><dd>server 反向向用户要输入/确认 —— 危险动作的刹车片。</dd>
+    <dt>提示注入 (prompt injection)</dt><dd>工具描述/返回值里藏恶意指令 —— MCP 时代的新攻击面。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="agent.html">Agent</a>（这页是它的协议层）· <a href="gpt6.html">GPT-6</a>（computer use 的工具调用底座）· <a href="reasoning.html">Reasoning</a>（决定何时调用工具的思考）· <a href="rag.html">RAG</a>（Resources 原语的表亲）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · MCP · 图解版 · 依据官方 spec 2026-07-28</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="mcp.js"></script>
+</body>
+</html>
