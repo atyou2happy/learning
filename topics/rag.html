@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG / Embedding — 查得到的 vs 背下来的</title>
+<meta name="description" content="RAG 与 Embedding：参数化知识的死穴、向量空间拖拽交互、余弦相似度、完整检索流水线、chunk 重叠、知识注入三方案对比。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 死穴</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 向量空间</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 流水线</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ chunk</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 三方案</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>RAG</div>
+    <div class="topic-kicker">LLM 应用 · 检索增强</div>
+    <h1 class="topic-title">RAG / Embedding</h1>
+    <p class="topic-sub">模型的知识冻结在训练截止日：问昨天的财报它编一个，问公司 wiki 它幻觉。RAG 的思路朴素 —— 检索相关文档拼进上下文再生成 —— 背后的魔法是 embedding：把文字变成向量后，「语义相近」变成「余弦相似度高」。拖动粉色查询点，亲眼看「猫狗老虎」抱团、「汽车卡车」扎堆。</p>
+    <div class="topic-meta">
+      <span class="tag">向量空间拖拽</span>
+      <span class="tag">余弦相似度</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="tokenizer.html" style="color:inherit">Tokenizer</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">死穴：背下来的知识会过期</h2></div>
+  <p class="level-goal">本层目标：理解参数化知识的三个边界 —— 过期、私有、幻觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 三个必错的问题</div>
+    <canvas id="problemCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">预训练把知识「烧」进权重（回忆 <a href="rlhf.html">RLHF 页</a>：预训练学世界怎么运转）。参数是静态快照：训练截止日之后的世界、从未见过的私有数据，它一无所知 —— 但下一词预测的本能（<a href="tokenizer.html">Tokenizer 页</a>）让它<strong>照常输出</strong>，于是有了幻觉。RAG 换思路：不更新参数，把「查到的资料」放进上下文。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>RAG 为什么比微调更适合「知识更新频繁」的场景？</p>
+    <div class="options">
+      <button class="opt">RAG 生成的文字更好</button>
+      <button class="opt">知识在文档里，更新 = 换文档重建索引（小时级）；微调的知识在权重里，更新 = 重跑训练（数千 GPU 时）</button>
+      <button class="opt">RAG 不需要模型</button>
+    </div>
+    <div class="explain">「外挂书架」vs「重写大脑」。知识频繁变 → 外挂；风格/领域语感稳定 → 才轮到微调。两者不互斥（L5）。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">向量空间：语义的几何学</h2></div>
+  <p class="level-goal">本层目标：拖动查询点，建立「余弦相似度 = 语义距离」的手感。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 语义散点（拖动粉色查询点！）</div>
+    <canvas id="vecCanvas" style="width:100%;height:340px;cursor:crosshair"></canvas>
+    <p class="viz-note">Embedding 模型把每段文字映射成高维向量（真实是 768-4096 维，这里 2D 示意）。语义近 → 夹角小 → cos 接近 1。拖动查询点：靠近「猫狗」时 cos≈0.997，滑向「汽车」时猫狗掉到负值 —— <strong>模型没有「动物」的概念表，但几何自动聚了类</strong>。注意：检索看的是夹角不是距离（长度常代表词频类的信号，要除掉）。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 向量算术：国王 − 男人 + 女人 ≈ 女王</div>
+    <canvas id="arithCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">方向携带语义：把「国王」向量里的「男性」分量减掉，加上「女性」分量，结果落在女王附近（cos=0.917）。这种线性结构是 embedding 最著名的性质 —— 说明维度不是乱码，而是学到了可解释的概念方向（word2vec 时代发现，现代 embedding 依然保持）。</p>
+  </div>
+
+  <div class="formula">
+    cos(a, b) = (a·b) / (‖a‖·‖b‖) · 值域 [−1, 1] · 越大越相似
+    <span class="ann">只看方向不看长度。真实向量 768-4096 维 —— 2D 是给它开的「可视化窗口」</span>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么用余弦相似度而不是欧氏距离？</p>
+    <div class="options">
+      <button class="opt">计算更快</button>
+      <button class="opt">历史习惯</button>
+      <button class="opt">向量长度常携带与语义无关的信号（文本长度、词频）；除以模长 = 只比较方向，语义才公平</button>
+    </div>
+    <div class="explain">一个短句和一个长文档谈同一件事，向量可能同方向不同长度 —— 余弦说「同类」，欧氏距离说「很远」。检索要的是前者。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">流水线：离线建索引，在线百毫秒</h2></div>
+  <p class="level-goal">本层目标：记住两条流水线 —— 离线一次、在线每查。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 完整 RAG 流水线</div>
+    <canvas id="pipeCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">离线：文档 → 切 chunk → embedding → 向量库（ANN 索引，百万级向量毫秒检索）。在线：查询 → 同一 embedding 模型向量化 → ANN 取 top-k → （可选）rerank 重排 → 拼进 prompt → 生成。<strong>查询与文档必须同一个 embedding 模型</strong> —— 两套坐标系无法比较。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>ANN（近似最近邻）为什么牺牲一点召回换速度？</p>
+    <div class="options">
+      <button class="opt">百万级向量精确比对要 O(N·d)， ANN（HNSW/IVF 类）用图/簇结构把检索降到近似对数级 —— top-k 里漏一两个边缘候选，重排阶段能救回来</button>
+      <button class="opt">精确算法不存在</button>
+      <button class="opt">为了省显存</button>
+    </div>
+    <div class="explain">「先粗筛后精排」是检索系统通用架构：ANN 粗召回 50 → cross-encoder 重排取 5 —— 重排模型看得慢但看得细（逐对打分）。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">chunk：检索的粒度艺术</h2></div>
+  <p class="level-goal">本层目标：理解 chunk 大小与重叠的权衡。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · chunk 切分与重叠</div>
+    <canvas id="chunkCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">chunk 太小 → 语义被切碎，检索到的片段缺上下文；太大 → 向量被稀释（一段谈三件事，哪个都不像）。经验起点：<strong>512 token + 12.5% 重叠</strong>（<a href="tokenizer.html">Tokenizer 页</a>的 token 口径）。重叠的作用：关键句跨边界时至少有一个 chunk 含完整语义。10k token 文档 → 23 chunks，检索 top-5 只带 2.5k token 进 prompt —— 证据要少而准。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 检索的账单（13B fp16）</div>
+    <canvas id="billCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">检索 30 页 = 15k token = 11.4GB KV（<a href="kv-cache.html">KV Cache 页</a>口径 0.78MB/token）。多检索不是免费的 —— prompt 越长 prefill 越贵（<a href="flash-attention.html">FlashAttention</a> 缓解）、注意力越分散。top-k 的 k 是精度与成本的旋钮，和 <a href="reasoning.html">Reasoning 页</a>的思考预算同构。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：三方案对比与混合</h2></div>
+  <p class="level-goal">本层目标：知道什么时候用 RAG、什么时候微调、什么时候直接塞。</p>
+
+  <table>
+    <tr><th>方案</th><th>建库/训练</th><th>更新成本</th><th>最适合</th></tr>
+    <tr><td>RAG</td><td>索引几小时</td><td>换文档即更（小时级）</td><td>事实型知识、私有库、时效内容</td></tr>
+    <tr><td>微调</td><td>数千 GPU 时</td><td>重跑训练</td><td>风格、领域语感、输出格式</td></tr>
+    <tr><td>长上下文</td><td>无需</td><td>零</td><td>单文档深读（≤200k token 的合同/论文）</td></tr>
+  </table>
+
+  <div class="viz">
+    <div class="viz-title">图 7 · 现实中的混搭</div>
+    <div style="background:rgba(126,231,135,.08);border:1px solid rgba(126,231,135,.3);border-radius:8px;padding:16px 20px;margin:12px 0;font-size:15px;line-height:1.9">
+      <div>🏢 <strong>企业知识库问答</strong>：RAG 管事实（wiki 天天更新）+ 微调管语气（客服腔调）</div>
+      <div>📚 <strong>论文问答</strong>：长上下文单篇深读 + RAG 跨库检索 + <a href="reasoning.html">思考模型</a>做多跳推理</div>
+      <div>🤖 <strong>Agentic RAG</strong>：思考模型自己决定「再查一次 / 换个关键词 / 够了可以答了」—— 检索从一次性动作变成多轮策略</div>
+    </div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>参数化知识会过期、无私有、爱幻觉 —— RAG 用「查到的」补「背下来的」（L1）</li>
+      <li>embedding 把语义变几何：余弦相似度高 = 方向近；「猫−狗 + 汽车」的算术有效（L2）</li>
+      <li>流水线两段式：离线建索引一次，在线检索百毫秒 —— 查询与文档同一 embedding 模型（L3）</li>
+      <li>chunk 512 tok + 12.5% 重叠是起点；top-k 是精度与成本的旋钮（L4）</li>
+      <li>RAG 管事实、微调管风格、长上下文管深读 —— 现实总是混搭（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>Embedding</dt><dd>把文本映射成稠密向量（768-4096 维），语义近 → 向量方向近。</dd>
+    <dt>余弦相似度</dt><dd>两向量夹角的余弦，[−1,1] —— 检索的标准语义距离。</dd>
+    <dt>ANN (近似最近邻)</dt><dd>HNSW/IVF 类索引结构，牺牲少量召回把百万级向量检索压到毫秒级。</dd>
+    <dt>chunk</dt><dd>检索的基本单元 —— 文档切成的小段（典型 256-1024 token）。</dd>
+    <dt>rerank (重排)</dt><dd>cross-encoder 对「查询-文档」逐对精细打分，粗筛后的第二道关。</dd>
+    <dt>混合检索</dt><dd>BM25（关键词精确匹配）+ 向量（语义泛化）双路召回 —— 两类信号互补。</dd>
+    <dt>agentic RAG</dt><dd>模型自主决定查什么、查几次 —— 检索变成多轮策略（与思考模型天然配对）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="tokenizer.html">Tokenizer</a>（chunk 的 token 口径）· <a href="kv-cache.html">KV Cache</a>（检索的显存账单）· <a href="reasoning.html">Reasoning</a>（agentic 检索的大脑）· <a href="mostik.html">Mostik</a>（另一种大小模型分工）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · RAG · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="rag.js"></script>
+</body>
+</html>
