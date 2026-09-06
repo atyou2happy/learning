@@ -6,8 +6,8 @@
     orange: '#ffa657', purple: '#a371f7', red: '#f85149',
     dim: '#8b949e', dark: '#30363d', bg: '#0a0d12', text: '#c9d1d9'
   };
-  var FONT = '12px sans-serif';
-  var MONO = 'bold 12px monospace';
+  var FONT = '13.5px sans-serif';
+  var MONO = 'bold 13.5px monospace';
 
   function fit(id) {
     var cv = document.getElementById(id);
@@ -99,7 +99,7 @@
       ctx.fillRect(gx, gy, gw, gh);
       ctx.strokeStyle = C.blue;
       ctx.strokeRect(gx, gy, gw, gh);
-      ctx.fillStyle = C.blue; ctx.font = 'bold 13px monospace';
+      ctx.fillStyle = C.blue; ctx.font = 'bold 14.5px monospace';
       ctx.fillText('GLM-5.2', gx + 40, gy + 22);
       ctx.font = MONO;
       ctx.fillText('753B', gx + 55, gy + 40);
@@ -114,7 +114,7 @@
       ctx.fillRect(qx, qy, qw, qh);
       ctx.strokeStyle = C.green;
       ctx.strokeRect(qx, qy, qw, qh);
-      ctx.fillStyle = C.green; ctx.font = 'bold 13px monospace';
+      ctx.fillStyle = C.green; ctx.font = 'bold 14.5px monospace';
       ctx.fillText('Qwen-3.5', qx + 36, qy + 22);
       ctx.font = MONO;
       ctx.fillText('4B', qx + 66, qy + 40);
@@ -129,7 +129,7 @@
       ctx.fillRect(bx0, byMid - 26, bx1 - bx0, 52);
       ctx.strokeStyle = C.purple;
       ctx.strokeRect(bx0, byMid - 26, bx1 - bx0, 52);
-      ctx.fillStyle = C.purple; ctx.font = 'bold 12px monospace';
+      ctx.fillStyle = C.purple; ctx.font = 'bold 13.5px monospace';
       ctx.fillText('BRIDGE', (bx0 + bx1) / 2 - 26, byMid - 8);
       ctx.font = FONT; ctx.fillStyle = C.text;
       ctx.fillText('翻译隐态', (bx0 + bx1) / 2 - 26, byMid + 10);
@@ -168,7 +168,7 @@
         ctx.fillRect(cd.x, 30, 150, 84);
         ctx.strokeStyle = C.green;
         ctx.strokeRect(cd.x, 30, 150, 84);
-        ctx.fillStyle = C.green; ctx.font = 'bold 26px monospace';
+        ctx.fillStyle = C.green; ctx.font = 'bold 28px monospace';
         ctx.fillText(cd.v, cd.x + 12, 72);
         ctx.fillStyle = C.dim; ctx.font = FONT;
         ctx.fillText(cd.d, cd.x + 12, 100);
@@ -293,7 +293,7 @@
       var ctx = c.ctx;
       ctx.fillStyle = C.bg; ctx.fillRect(0, 0, c.w, c.h);
       /* 模式A: 低延迟 */
-      ctx.fillStyle = C.text; ctx.font = 'bold 12px monospace';
+      ctx.fillStyle = C.text; ctx.font = 'bold 13.5px monospace';
       ctx.fillText('模式 A · 低延迟服务', 16, 24);
       ctx.font = FONT; ctx.fillStyle = C.dim;
       ctx.fillText('大模型贡献 prefill 隐态 → 小模型 decode 全速生成', 16, 42);
@@ -310,7 +310,7 @@
         ax += w;
       });
       /* 模式B: 跨端点 */
-      ctx.fillStyle = C.text; ctx.font = 'bold 12px monospace';
+      ctx.fillStyle = C.text; ctx.font = 'bold 13.5px monospace';
       ctx.fillText('模式 B · 跨端点传输', 16, 134);
       ctx.font = FONT; ctx.fillStyle = C.dim;
       ctx.fillText('隐态在独立部署的端点间传输 —— 小模型跑在任意有空闲的 GPU 上 (含旧卡)', 16, 152);

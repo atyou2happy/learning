@@ -112,7 +112,7 @@
         ctx.strokeRect(x + 6, bot - hh, cell - 14, hh);
         ctx.fillStyle = C.dim; ctx.font = '11px monospace'; ctx.textAlign = 'center';
         ctx.fillText('t=' + t, x + cell / 2 - 4, bot + 16);
-        ctx.fillStyle = (t === n) ? C.red : C.pink; ctx.font = 'bold 12px monospace';
+        ctx.fillStyle = (t === n) ? C.red : C.pink; ctx.font = 'bold 13.5px monospace';
         ctx.fillText(String(t), x + cell / 2 - 4, bot - hh - 6);
         ctx.textAlign = 'left';
       }
@@ -409,7 +409,7 @@
         var x = b.x * c.w, y = b.y * c.h, w = b.w * c.w, h = b.h * c.h;
         ctx.fillStyle = 'rgba(88,166,255,.07)'; ctx.strokeStyle = b.col;
         roundRect(ctx, x, y, w, h, 8); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = b.col; ctx.font = '12px sans-serif';
+        ctx.fillStyle = b.col; ctx.font = '13.5px sans-serif';
         var lines = b.t.split('\n');
         lines.forEach(function (ln, li) {
           ctx.fillText(ln, x + 10, y + h / 2 + 4 + (li - (lines.length - 1) / 2) * 15);
@@ -458,7 +458,7 @@
         { y: 132, shared: true }
       ];
       rows.forEach(function (r) {
-        ctx.fillStyle = C.dim; ctx.font = '12px sans-serif';
+        ctx.fillStyle = C.dim; ctx.font = '13.5px sans-serif';
         ctx.fillText(r.shared ? '开启共享: system 前缀只存 1 份' : '无共享: 3 个请求各存 1 份完整前缀', 14, r.y - 12);
         var total = r.shared ? 10 : 18;
         for (var i = 0; i < total; i++) {
@@ -469,7 +469,7 @@
           ctx.strokeStyle = isPre ? C.purple : C.blue;
           ctx.strokeRect(x, r.y, cw, 54);
         }
-        ctx.font = 'bold 13px monospace';
+        ctx.font = 'bold 14.5px monospace';
         if (r.shared) {
           ctx.fillStyle = C.green;
           ctx.fillText('10 块  ← 省 8 块 (44%)', 14 + 10 * (cw + 3) + 10, r.y + 32);

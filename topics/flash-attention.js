@@ -6,8 +6,8 @@
     orange: '#ffa657', purple: '#a371f7', red: '#f85149',
     dim: '#8b949e', dark: '#30363d', bg: '#0a0d12', text: '#c9d1d9'
   };
-  var FONT = '12px sans-serif';
-  var MONO = 'bold 12px monospace';
+  var FONT = '13.5px sans-serif';
+  var MONO = 'bold 13.5px monospace';
   var GB = 1073741824;
 
   function fit(id) {

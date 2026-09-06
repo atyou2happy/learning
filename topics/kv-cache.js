@@ -7,8 +7,8 @@
     orange: '#ffa657', purple: '#a371f7', red: '#f85149',
     dim: '#8b949e', dark: '#30363d', bg: '#0a0d12', text: '#c9d1d9'
   };
-  var FONT = '12px sans-serif';
-  var MONO = 'bold 12px monospace';
+  var FONT = '13.5px sans-serif';
+  var MONO = 'bold 13.5px monospace';
 
   function fit(id) {
     var cv = document.getElementById(id);
@@ -90,7 +90,7 @@
       cols.forEach(function (col, ci) {
         var cx = ci * colW + colW / 2;
         ctx.fillStyle = col.col;
-        ctx.font = 'bold 15px monospace';
+        ctx.font = 'bold 16.5px monospace';
         ctx.fillText(col.name, cx - 6, 26);
         for (var i = 0; i < n; i++) {
           var y = y0 + i * rowH;
@@ -150,7 +150,7 @@
       ctx.fillText('K: 256 KB', x0 + bw * 0.25 - 36, (y0 + y1) / 2);
       ctx.fillStyle = C.pink;
       ctx.fillText('V: 256 KB', x0 + bw * 0.75 - 36, (y0 + y1) / 2);
-      ctx.fillStyle = C.green; ctx.font = 'bold 16px monospace';
+      ctx.fillStyle = C.green; ctx.font = 'bold 17px monospace';
       ctx.fillText('512 KB', x1 + 12, (y0 + y1) / 2 - 4);
       ctx.fillStyle = C.dim; ctx.font = FONT;
       ctx.fillText('每 token', x1 + 12, (y0 + y1) / 2 + 12);
@@ -227,11 +227,11 @@
         ctx.beginPath(); ctx.moveTo(cx, 56);
         ctx.lineTo(cx + 17 * Math.cos(ang), 56 + 17 * Math.sin(ang)); ctx.stroke();
         ctx.lineWidth = 1;
-        ctx.fillStyle = d.col; ctx.font = 'bold 13px monospace';
+        ctx.fillStyle = d.col; ctx.font = 'bold 14.5px monospace';
         ctx.fillText(d.k, cx - ctx.measureText(d.k).width / 2, 100);
         ctx.fillStyle = C.dim; ctx.font = FONT;
         ctx.fillText(d.d, cx - ctx.measureText(d.d).width / 2, 120);
-        ctx.fillStyle = d.col; ctx.font = 'bold 15px monospace';
+        ctx.fillStyle = d.col; ctx.font = 'bold 16.5px monospace';
         ctx.fillText(d.r, cx - ctx.measureText(d.r).width / 2, 148);
       });
       ctx.fillStyle = C.dim; ctx.font = FONT;
@@ -252,7 +252,7 @@
       ];
       var qw = 22, gap = 7, qx = 70;
       rows.forEach(function (r) {
-        ctx.fillStyle = r.col; ctx.font = 'bold 13px monospace';
+        ctx.fillStyle = r.col; ctx.font = 'bold 14.5px monospace';
         ctx.fillText(r.label, 8, r.y + 6);
         for (var i = 0; i < 8; i++) {
           var x = qx + i * (qw + gap);
