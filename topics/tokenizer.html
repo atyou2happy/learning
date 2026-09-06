@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tokenizer / BPE — 模型眼中的文字</title>
+<meta name="description" content="Tokenizer 与 BPE：strawberry 之谜、BPE 合并动画、词表演进（17 bits 的由来）、中英文 token 效率、上下文换算器。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① strawberry</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② BPE</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 词表</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 中英效率</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 换算器</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Tokenizer</div>
+    <div class="topic-kicker">LLM 基础 · 分词</div>
+    <h1 class="topic-title">Tokenizer / BPE</h1>
+    <p class="topic-sub">全站每一页都从 token 起步：KV Cache 按 token 记账、采样在词表上出分布、你按 token 付费 —— 但 token 到底是什么？为什么模型数不清 strawberry 里有几个 r？为什么中文比英文贵？点六次按钮，看 BPE 怎么把字符滚成词表。</p>
+    <div class="topic-meta">
+      <span class="tag">BPE 合并动画</span>
+      <span class="tag">上下文换算器</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">全站第 0 层 · 建议首读</span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">strawberry 之谜：模型看不见字母</h2></div>
+  <p class="level-goal">本层目标：理解 token ≠ 字符 ≠ 词 —— 模型阅读的是另一种单位。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一个单词，两种视角</div>
+    <canvas id="berryCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">cl100k 分词器把 strawberry 切成 <code>[str][aw][berry]</code> 三个 token —— 三个 r 分别藏在第 1 和第 3 个 token 内部。模型要数 r，必须「反编译」每个 token 回字符 —— 这不是智力问题，是<strong>输入格式</strong>问题。同理：数字运算按位切、代码缩进被合并，都是分词器的锅。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>以下哪个说法是对的？</p>
+    <div class="options">
+      <button class="opt">token 就是英文单词</button>
+      <button class="opt">token 就是字符</button>
+      <button class="opt">token 是词表里的一个条目 —— 可能是词、词片、单字符甚至字节，由训练时的统计决定</button>
+    </div>
+    <div class="explain">「the」是一个 token（高频），「theoretical」可能是 [the][oret][ical]（低频词被拆）。切法完全由词表统计决定，没有语言学规则。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">BPE：高频字符对的滚雪球</h2></div>
+  <p class="level-goal">本层目标：亲手点六次合并，看词表怎么从 7 个字符长出来。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · BPE 合并动画（语料：low low low lower lowest）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="bpeBtn" class="opt" style="border:1px solid var(--border)">下一步合并 → (0/6)</button>
+    </div>
+    <canvas id="bpeCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">每一步：数所有相邻对频次 → 合并最高的 → 写进词表。l+o 出现 5 次先合并成 lo，lo+w 又是 5 次成 low，然后 low+e（2 次）…… 频次逐级衰减是常态 —— <strong>高频词滚成整词 token，低频词留给字符组合</strong>。语料总 token 从 22 降到 7：压缩就是分词的全部目的。</p>
+  </div>
+
+  <div class="formula">
+    词表 = 初始字节/字符集 + N 次合并规则 · 解码新文本 = 按词表贪心匹配
+    <span class="ann">真实 BPE 在数 GB 语料上做 5~12 万次合并；GPT-4o 之后再训练的 tokenizer 用同样的思想加了正则预切分（不跨单词/数字边界合并）</span>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么 "lowest" 在动画里最后才整体成为 token，而 "low" 很早就成了？</p>
+    <div class="options">
+      <button class="opt">BPE 按频次贪心：low 出现 3 次 + lower/lowest 的前缀贡献，优先级高；lowest 只出现 1 次，排到后面甚至永远轮不到</button>
+      <button class="opt">因为 lowest 拼写更长</button>
+      <button class="opt">因为词典按字母序排列</button>
+    </div>
+    <div class="explain">在真实词表里 lowest 通常也不是完整 token —— 出现太少。BPE 的世界只认频次，不认语义。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">词表演进：15 → 18 bits 的军备竞赛</h2></div>
+  <p class="level-goal">本层目标：看懂词表大小背后的三笔账 —— bits、效率、成本。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 词表演进与每 token 信息量</div>
+    <canvas id="vocabCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">词表越大 → 高频组合（含中文词、代码惯用语）越可能整体成 token → 同样内容 token 数越少 → <strong>上下文更耐用、推理更便宜</strong>（回忆 <a href="kv-cache.html">KV Cache 页</a>：每 token 都有显存账单）。代价：embedding 矩阵更大（128k × 4096 × 2B ≈ 1GB）+ softmax 计算变贵。Llama-3 的 17.0 bits 正是 <a href="mostik.html">Mostik 页</a>「每 token 17 bits」的出处。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>词表从 32k 扩到 128k，同一篇文章的 token 数会怎么变？</p>
+    <div class="options">
+      <button class="opt">不变，token 数只跟文章长度有关</button>
+      <button class="opt">下降 —— 更多多字符组合整体成 token（尤其中文/代码），但每个 token 携带的信息量（bits）上升</button>
+      <button class="opt">上升，因为词表更大</button>
+    </div>
+    <div class="explain">中文受益最明显：旧词表每汉字 1-2 token，大词表常见词组成单 token —— 这就是 Qwen/Gemma 把词表做到 15-25 万的动机：中文用户同样的窗口装下更多内容。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">中英效率：同样的窗口，不同的容量</h2></div>
+  <p class="level-goal">本层目标：算清「中文为什么贵」这笔账。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 同信息量的 token 账单对比</div>
+    <canvas id="effCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">同样 100 单位内容：英文 100 词 ≈ 150 token，中文 100 汉字（新 tokenizer）≈ 67 token —— 但旧 GPT-3.5 时代要 133 token（每汉字 1.33 个）。<strong>中文「贵」是词表偏英文的历史问题</strong>，不是语言本身的问题；国产大词表模型已把这笔钱省了。emoji 更惨：UTF-8 四字节被切碎，一个 😀 旧价 3-4 token。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>128k 窗口的模型，中英文各能装多少内容？</p>
+    <div class="options">
+      <button class="opt">一样多，都是 128k</button>
+      <button class="opt">中文更多因为汉字信息密度高</button>
+      <button class="opt">按新 tokenizer：英文 ≈ 96k 词（一本长篇），中文 ≈ 19 万字（两本中篇）—— 汉字密度优势 + 大词表红利</button>
+    </div>
+    <div class="explain">128k × 1.5 汉字/token = 19.2 万字。汉字单字信息量高于英文单词的 1/1.5，所以同窗口中文装的内容确实更多 —— 前提是 tokenizer 对中文友好。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：上下文换算器 + 分词器的锅</h2></div>
+  <p class="level-goal">本层目标：建立 token ↔ 页/书的直觉，并记住分词器背的锅清单。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 上下文换算器（点按钮切换中英文）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="langBtn" class="opt" style="border:1px solid var(--border)">🌐 英文 ⇄ 中文</button>
+    </div>
+    <canvas id="ctxCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">128k ≈ 一本长篇小说或两本中文中篇 —— 所谓「长上下文」就是让你把整个代码库或十几份 PDF 塞进一次对话。1M（Gemini）≈ 10 本书。</p>
+  </div>
+
+  <table>
+    <tr><th>现象</th><th>分词器的锅</th></tr>
+    <tr><td>数不清 strawberry 的 r / 拼写错误</td><td>r 藏在 token 内部，模型不直接看字符（L1）</td></tr>
+    <tr><td>大数算术错（123×456）</td><td>数字按 3 位一切（[123][456]），进位模式学不到</td></tr>
+    <tr><td>代码缩进/空格敏感 bug</td><td>连续空格被合并成专用 token，缩进语义漂移</td></tr>
+    <tr><td>反向拼写 / 首字母任务差</td><td>token 顺序是模型看到的全部 —— 字符序不在输入里</td></tr>
+    <tr><td>提示词注入难防</td><td>「忽略以上指令」和变体可能被切成不同 token —— 规则匹配漏网</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>模型看的是 token 不是字符 —— strawberry 的 r 藏在 token 内部（L1）</li>
+      <li>BPE = 高频字符对贪心合并：高频词滚成整 token，低频词留字符组合（L2）</li>
+      <li>词表 5 万→25 万：log2 = 15-18 bits/token，Mostik 的「17 bits」就是 Llama-3 词表（L3）</li>
+      <li>中文曾贵 1.3 倍是词表偏英文的历史账，大词表（Qwen 15 万）已纠正（L4）</li>
+      <li>128k ≈ 一本长篇/19 万汉字；数数/算术/缩进 bug 多半是分词器的锅（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>token</dt><dd>词表中的一个条目 —— 词、词片、字符或字节。模型世界的基本单位。</dd>
+    <dt>BPE (Byte Pair Encoding)</dt><dd>从字符开始反复合并最高频相邻对的算法 —— 现代分词器的骨架。</dd>
+    <dt>byte-level BPE</dt><dd>以 256 个字节为初始词表 —— 任何 UTF-8 文本都永不 OOV（未知字符有 fallback）。</dd>
+    <dt>OOV (out-of-vocabulary)</dt><dd>词表里没有的序列。byte-level BPE 后基本消灭 —— 代价是切成更多 token。</dd>
+    <dt>特殊 token</dt><dd>&lt;|im_start|&gt;、&lt;/s&gt; 等 chat template 专用标记 —— 不在文本统计里，是设计出来的。</dd>
+    <dt>tiktoken</dt><dd>OpenAI 的分词器库 —— 网页版 tiktokenizer 可实测任意文本的 token 数。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">这是全站的地基页 —— 往上走：<a href="kv-cache.html">KV Cache</a>（token 的显存账）· <a href="sampling.html">采样策略</a>（token 的出生方式）· <a href="mostik.html">Mostik</a>（每 token 17 bits 的瓶颈）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Tokenizer · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="tokenizer.js"></script>
+</body>
+</html>
