@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Speculative Decoding — 让大模型验证而非苦写</title>
+<meta name="description" content="投机解码：小模型起草、大模型一次 forward 并行验证，无损加速 2-4x。验证游戏、加速比曲线、变体家族与拒绝采样证明。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 喂不饱</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 赌一把</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 数学</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 无损</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 家族</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Speculative Decoding</div>
+    <div class="topic-kicker">LLM 推理加速 · 采样</div>
+    <h1 class="topic-title">Speculative Decoding</h1>
+    <p class="topic-sub">decode 逐 token 爬行，GPU 算力大量空转 —— 因为一次 forward 只为产出 1 个 token。投机解码的赌局：小模型先连猜 γ 个，大模型一次 forward 并行验证全部 —— 猜对白赚，猜错回退。数学上与原模型逐 token 生成完全等价，却快 2~4 倍。</p>
+    <div class="topic-meta">
+      <span class="tag">验证游戏</span>
+      <span class="tag">加速比曲线</span>
+      <span class="tag">约 11 分钟</span>
+      <span class="tag">前置：<a href="kv-cache.html" style="color:inherit">KV Cache</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">喂不饱的 GPU：算力与产出严重失衡</h2></div>
+  <p class="level-goal">本层目标：看清 decode 阶段「一次 forward 一个 token」的浪费本质。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 标准 decode vs 投机 decode 的算力利用</div>
+    <canvas id="hungryCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">大模型 forward 一次的算力足够同时算几十个位置 —— 标准解码只用它算 1 个，其余浪费。验证 γ 个草稿 token 与生成 1 个的算力几乎相同（并行矩阵乘），<strong>猜中的每一个都是白赚</strong>。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么验证 4 个草稿 token 不会比生成 1 个慢多少？</p>
+    <div class="options">
+      <button class="opt">因为草稿 token 更短</button>
+      <button class="opt">因为小模型先做了预处理</button>
+      <button class="opt">因为 transformer 的 forward 对序列长度是并行的 —— 4 个位置一起算和 1 个位置算，墙钟几乎相同</button>
+    </div>
+    <div class="explain">这就是 prefill 快 decode 慢的镜像（KV Cache 页讲过的不对称）：并行度才是关键。投机解码本质是把 decode「伪装」成一小段 prefill。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">赌局：起草 → 验证 → 收割或回退</h2></div>
+  <p class="level-goal">本层目标：亲手玩三轮验证游戏，建立「接受前缀 + 免费纠正位」的直觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 核心验证游戏（点击按钮逐步推进：起草 → 验证 → 下一轮）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="sdBtn" class="opt" style="border:1px solid var(--border)">▶ 起草 (第 1 轮)</button>
+    </div>
+    <canvas id="gameCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">三轮结束看记分牌：<strong>9 个 token 只用 3 次目标 forward</strong>（3.0 token/forward）。绿格 = 接受的草稿；紫格 ◄ = 猜错处大模型亲自纠正的位置（照收！）；红格 = 被丢弃的错误草稿。注意每轮保底产出 1 个 token —— 最坏情况也不亏算力，只亏草案时间。</p>
+  </div>
+
+  <div class="formula">
+    每轮产出 ≥ 1 (验证位) + 接受数 n · 墙钟 = 1 次目标 forward + γ 次廉价草案
+    <span class="ann">最坏情形（全猜错）：产出 1 个 token，多花 γ 次小模型 forward —— 代价有界，收益无界</span>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>「免费纠正位」是什么意思？</p>
+    <div class="options">
+      <button class="opt">大模型不验证直接采纳草稿</button>
+      <button class="opt">草稿第 n+1 个猜错时，验证 forward 本身就顺带算出了该位置的正确 token —— 这个位置的产出不花额外算力</button>
+      <button class="opt">小模型出错后免费重试</button>
+    </div>
+    <div class="explain">验证 forward 计算的是「每个位置若由我来生成，下一个 token 是什么」—— 猜错位置的答案恰好是这个计算的副产品。所以每轮产出 = 接受数 + 1，永不空手。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">数学：接受率决定一切，γ 有最优值</h2></div>
+  <p class="level-goal">本层目标：一条公式 + 一组曲线，理解加速比的上限与 γ 的权衡。</p>
+
+  <div class="formula">
+    E[每轮产出] = 1 + α + α² + … + α^γ = (1−α^(γ+1)) / (1−α) &nbsp;&nbsp;·&nbsp;&nbsp; 加速比 S ≈ E[产出] / (1 + γ·c)
+    <span class="ann">α = 单 token 接受率（几何分布假设下）；c = 草案模型成本比（取 0.05）。α 是唯一命门：草案越像目标，α 越高</span>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 加速比曲线：α 三档 × γ=1..8（圆点 = 各自最优 γ）</div>
+    <canvas id="curveCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">α=0.8 时最优 γ≈8、S=3.09x；α=0.7 时 γ=5-6 就到顶（2.35x）。<strong>曲线会掉头</strong>：γ 太大时草案质量下降 + 错误草稿浪费验证算力 —— 这就是「投机」的真实成本曲线。实测锚点：EAGLE-2 报 2.7-3.7x，DeepSeek MTP ~1.8x，与本公式 α=0.8, γ=4 → 2.80x 同量级。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>草案模型很弱（α=0.5）时，为什么加大 γ 反而更亏？</p>
+    <div class="options">
+      <button class="opt">每多猜一个，多花一份草案成本 + 大概率错在第 1-2 个就回退 —— 后面的草案纯属浪费</button>
+      <button class="opt">γ 大了会爆显存</button>
+      <button class="opt">大模型验证时会变慢</button>
+    </div>
+    <div class="explain">α=0.5 时连续猜对 4 个的概率只有 6%。草案成本是「每轮必付」的，收益却按几何分布衰减 —— 期望值算不过来就收手。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">无损：这不是量化，是数学等价</h2></div>
+  <p class="level-goal">本层目标：理解拒绝采样如何保证输出分布与原模型完全一致。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 拒绝采样：接受与拒绝都落在原模型的分布里</div>
+    <canvas id="losslessCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">草案命中高概率 token → 大概率直接接受；命中冷门 → 大概率拒绝并由大模型亲自出 token。两种结局的合成分布恰好等于目标模型自己的分布 —— <strong>逐 token 对比与不开投机时完全一致</strong>。</p>
+  </div>
+
+  <div class="formula">
+    接受概率 min(1, p(x)/q(x)) · 拒绝时按 p(x)−q(x) 重采样 ⇒ 最终分布 ≡ p(x)
+    <span class="ann">这就是「lossless」的严格含义 —— 区别于量化(改数值)或蒸馏(改模型)，投机解码不改任何概率</span>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>为什么说投机解码是「无损」而量化是「有损」？</p>
+    <div class="options">
+      <button class="opt">因为小模型不出现在最终输出里</button>
+      <button class="opt">因为它只加速验证不加速生成</button>
+      <button class="opt">拒绝采样保证最终序列的分布与目标模型独立生成的分布数学等价；量化则改变了概率本身</button>
+    </div>
+    <div class="explain">小模型只影响「猜什么」，不影响「最终分布是什么」—— 它是提案者，不是决策者。决策权始终在目标模型的分布里。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">家族与落地：从外挂起草到长在模型身上</h2></div>
+  <p class="level-goal">本层目标：认全四代变体 + 知道生产参数怎么调。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 变体家族演进</div>
+    <canvas id="familyCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">趋势：起草器从「独立小模型」（外挂、慢、α 低）→「多头并行」（Medusa）→「特征层树搜索」（EAGLE，α 高）→「训练时就内建」（MTP，零额外部署）。草案质量每上一档，加速比跟着上一档。</p>
+  </div>
+
+  <table>
+    <tr><th>引擎/参数</th><th>作用</th><th>备注</th></tr>
+    <tr><td><code>vllm --speculative-model</code></td><td>指定草案模型</td><td>经典两模型模式</td></tr>
+    <tr><td><code>num-speculative-tokens</code></td><td>每轮起草长度 γ</td><td>常用 3-5，按接受率调</td></tr>
+    <tr><td><code>EAGLE-3 / MTP 权重</code></td><td>官方发布的自起草头</td><td>DeepSeek-V3、Qwen 系均已内置</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>decode 一次 forward 只产 1 token，算力喂不饱 —— 验证 γ 个与算 1 个墙钟几乎相同（L1）</li>
+      <li>赌局结构：小模型起草 → 大模型并行验证 → 接受前缀 + 免费纠正位，最坏也保底 1 token（L2）</li>
+      <li>加速比 S 由 α（接受率）决定，γ 有最优值：草案差时收手，草案好时加注（L3）</li>
+      <li>拒绝采样保证输出分布与原模型数学等价 —— 无损，不同于量化/蒸馏（L4）</li>
+      <li>四代演进：外挂 → Medusa 多头 → EAGLE 特征层树 → MTP 训练内建；实测 2-4x（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>draft model / 草案模型</dt><dd>便宜的小模型，负责猜。可以独立（经典）、多头（Medusa）、特征层（EAGLE）或内建（MTP）。</dd>
+    <dt>γ (gamma)</dt><dd>每轮起草的 token 数。存在最优值：太小赚不满，太大草案质量崩。</dd>
+    <dt>α (接受率)</dt><dd>草稿 token 被目标模型接受的概率。几何分布假设下连续接受率约为 α^n。</dd>
+    <dt>拒绝采样 (rejection sampling)</dt><dd>按 min(1, p/q) 接受、拒绝时按残差分布重采的机制 —— 无损性的数学来源。</dd>
+    <dt>MTP (Multi-Token Prediction)</dt><dd>训练时就让模型预测未来多个 token 的头，推理时直接当起草器（DeepSeek-V3）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="kv-cache.html">KV Cache</a>（为什么不symmetric）· <a href="mostik.html">Mostik</a>（另一个大小模型协作 —— 它传隐态，本页传草案）· <a href="continuous-batching.html">Continuous Batching</a>（服务端吞吐视角）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Speculative Decoding · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="speculative-decoding.js"></script>
+</body>
+</html>

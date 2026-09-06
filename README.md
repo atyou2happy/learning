@@ -11,6 +11,7 @@
 - [FlashAttention](topics/flash-attention.html) — LLM 训练/推理 · IO-aware kernel · tiling 动画（前置：KV Cache）
 - [Mostik](topics/mostik.html) — 模型协作 · 隐空间桥接 · 2026.09 新技术
 - [Continuous Batching](topics/continuous-batching.html) — LLM 推理服务 · 迭代级调度 · 回填甘特图动画（前置：PagedAttention）
+- [Speculative Decoding](topics/speculative-decoding.html) — LLM 推理加速 · 投机解码 · 验证游戏（前置：KV Cache）
 
 ## 页面结构（五层）
 
