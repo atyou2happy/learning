@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>采样策略 — Temperature / Top-k / Top-p</title>
+<meta name="description" content="LLM 采样策略：模型输出的是分布不是答案。温度滑块实时变形 softmax、top-k 与 top-p 截断对比、组合拳决策树。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 分布</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 温度</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 截断</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 组合拳</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 落地</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Sampling</div>
+    <div class="topic-kicker">LLM 推理 · 采样</div>
+    <h1 class="topic-title">采样策略：Temperature / Top-k / Top-p</h1>
+    <p class="topic-sub">人人都调过 temperature=0.7，但 90% 没真懂它改的是什么。模型每步输出的不是答案，是一个 15 万词表上的概率分布 —— 三个参数各自对这个分布动手：温度负责「变形」（锐化或摊平），top-k / top-p 负责「截断」（砍掉谁）。拖动滑块，亲眼看分布弯腰。</p>
+    <div class="topic-meta">
+      <span class="tag">温度滑块</span>
+      <span class="tag">截断对比</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="speculative-decoding.html" style="color:inherit">Speculative Decoding</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">模型输出的是分布，不是答案</h2></div>
+  <p class="level-goal">本层目标：看清 logits → softmax → 分布这条流水线，以及贪心为什么是个陷阱。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 「今天天气真…」的原始分数与贪心陷阱</div>
+    <canvas id="logitsCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">logits 是未归一化的分数（可以是任意实数），softmax 把它变成和为 1 的概率。注意「好」42.7% 只是最<strong>大</strong>，不是唯<strong>一</strong> —— 剩下 57.3% 全部扔掉就是贪心（argmax）做的事。贪心还会陷入「很好很好很好」的重复循环：每步选最大，而最大值又被自己的输出不断强化。</p>
+  </div>
+
+  <div class="formula">
+    softmax(xᵢ) = e^xᵢ / Σ e^xⱼ — 把任意实数分数变成概率分布，保序不保距
+    <span class="ann">「保序不保距」：logits 差 0.4（好 4.2 vs 不错 3.8）到概率里被放大成 42.7% vs 28.6% —— 指数函数爱富嫌贫</span>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么说 temperature=0 的贪心解码可能陷入重复循环，而采样不会？</p>
+    <div class="options">
+      <button class="opt">因为采样时模型会重新计算 logits</button>
+      <button class="opt">贪心是确定性的：同一上下文永远选同一个 token，自反馈形成环；采样按概率抽签，有机会跳出局部最优</button>
+      <button class="opt">因为采样时温度高于 0</button>
+    </div>
+    <div class="explain">确定性系统一旦进入「输出强化自身选择」的状态就永远出不来。随机性不只是花哨 —— 它是自我纠错机制。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">Temperature：分布的变形旋钮</h2></div>
+  <p class="level-goal">本层目标：拖滑块建立手感 —— T 小 → 尖峰（确定），T 大 → 摊平（随机）。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 温度滑块：拖动看分布实时变形（0.05 ~ 2.0）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="tempSlider" min="0.05" max="2" step="0.05" value="1" style="flex:1">
+      <span id="tempLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:70px">T = 1.00</span>
+    </div>
+    <canvas id="tempCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">数学：温度把 logits 除以 T 再 softmax。T=0.5 时「好」从 42.7% 涨到 <strong>62.5%</strong>；T=2 时摊平到 <strong>28.1%</strong>，连「舒服」(0.3%) 都有了 2.3% 的出场机会。T→0 极限就是 argmax（100% 集中在最大值）。</p>
+  </div>
+
+  <div class="formula">
+    pᵢ(T) = e^(xᵢ/T) / Σ e^(xⱼ/T) · T→0 ⇒ argmax · T→∞ ⇒ 均匀分布
+    <span class="ann">注意温度不改变<strong>排序</strong>，只改变<strong>差距</strong> —— 它是差距的放大镜/缩小镜，不是重排器</span>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>T=2 时「热」(logits 2.4) 的概率上升，而「好」(4.2) 下降 —— 为什么？</p>
+    <div class="options">
+      <button class="opt">因为「热」被重新排序到前面</button>
+      <button class="opt">因为高温时模型变得更聪明</button>
+      <button class="opt">温度缩小 logits 间的相对差距：除以 2 后 4.2 和 2.4 只差 0.9，指数放大效应减弱 —— 冷门 token 找回生存空间</button>
+    </div>
+    <div class="explain">变形是「差距压缩」：大家都被除以 T，高分低分靠得更近，softmax 的指数放大不再能把差距拉开。低温则相反 —— 差距被放大成鸿沟。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">Top-k / Top-p：分布的截断剪刀</h2></div>
+  <p class="level-goal">本层目标：理解两种截断的规则差异，以及为什么 top-p 更适应分布形状。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 同一分布两种剪法：top-k=3 固定条数 vs top-p=0.9 累积圈选</div>
+    <canvas id="truncCanvas" style="width:100%;height:300px"></canvas>
+    <p class="viz-note">top-k=3 永远保留前 3 名（本例质量 85.6%，重归一后「好」49.9%）；top-p=0.9 从大到小累积，够 90% 就停 —— 本例圈了 4 个（累积 92.6%）。被剪掉的 token 不重抽，直接从候选中消失。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 反例对照：平坦分布与尖峰分布下两者谁出错</div>
+    <canvas id="shapeCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note"><strong>平坦分布</strong>（开放创作，8 个候选都合理）：top-p=0.9 圈走 7 个，top-k=3 误删一半合理候选 → 创作变得呆板。<strong>尖峰分布</strong>（事实问答，正确答案 99%）：top-p 圈 1 个正合适，top-k=5 硬塞进 4 个垃圾 → 偶发胡说。top-p 的圈选数随分布形状自适应 —— 这就是 2020 年论文《The Curious Case of Neural Text Degeneration》后大家逐渐转向 top-p 的原因。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>温度和 top-p 都能让输出「更疯」，两者机制有何本质不同？</p>
+    <div class="options">
+      <button class="opt">温度是变形（保留全部候选但重配概率），top-p 是截断（直接删人）—— 前者连续后者离散</button>
+      <button class="opt">没有区别，只是参数名不同</button>
+      <button class="opt">温度删冷门，top-p 改排序</button>
+    </div>
+    <div class="explain">temperature=1.5 时「舒服」仍有 2.3% 的机会；top-p=0.6 时它直接出局永无翻身。变形 vs 截断 —— 组合使用才有完整控制力。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">组合拳：任务 → 参数的映射</h2></div>
+  <p class="level-goal">本层目标：把三个旋钮拧成一句话 —— 什么任务用什么配置，为什么。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 决策速查：四类典型需求</div>
+    <canvas id="comboCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">记住心法：<strong>温度管「敢不敢」，top-p 管「圈子多大」</strong>。代码要 T→0（唯一正确答案）；通用对话 T=0.7+top-p=0.9（多样但不离谱）；头脑风暴 T=1.2+top-p=0.95（允许野路子）；API 只暴露 temperature 时默认 top-p≈0.9 已在工作。</p>
+  </div>
+
+  <table>
+    <tr><th>任务</th><th>temperature</th><th>top-p</th><th>为什么</th></tr>
+    <tr><td>代码生成 / 数学 / 抽取</td><td>0 ~ 0.2</td><td>—</td><td>要唯一解，分布越尖越好</td></tr>
+    <tr><td>通用对话</td><td>0.7</td><td>0.9</td><td>多样性与可控性的平衡点</td></tr>
+    <tr><td>创意写作 / 头脑风暴</td><td>1.0 ~ 1.5</td><td>0.95</td><td>需要冷门 token 的生存空间</td></tr>
+    <tr><td>事实问答 / 摘要</td><td>0.1 ~ 0.3</td><td>—</td><td>忠实原文，不需要多样性</td></tr>
+    </table>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>写代码的任务配 temperature=1.5 + top-p=0.95 会发生什么？</p>
+    <div class="options">
+      <button class="opt">代码会更有创意所以更好</button>
+      <button class="opt">变量名随机漂移、API 记错、括号不配对 —— 每步的小概率错误在长序列里累积成必然的语法灾难</button>
+      <button class="opt">模型会拒绝回答</button>
+    </div>
+    <div class="explain">代码是强结构任务：一步错步步错。1.5 的温度让每步都有几个百分点的概率偏离正轨，100 个 token 后正确率只剩 (0.97)^100 ≈ 5%。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：工程真相与边界</h2></div>
+  <p class="level-goal">本层目标：知道生产环境的坑 —— temperature=0 并不完全确定，参数有平台差异。</p>
+
+  <table>
+    <tr><th>现象/坑</th><th>真相</th></tr>
+    <tr><td>temperature=0 还是有随机性？</td><td>浮点求和顺序、batch 内 padding、kernel 分支都能让 logits 差之毫厘 —— argmax 翻转。要强确定需 seed + 单条请求</td></tr>
+    <tr><td>「只调 temperature」的平台</td><td>top-p 大多固定在 ~0.9 左右工作 —— 你只拧了一个旋钮，另一个早就在动</td></tr>
+    <tr><td>temperature 和 top-p 一起调？</td><td>可以但不独立：先定 T 定调子，再用 top-p 收圈子；论文惯例是动一个锁一个</td></tr>
+    <tr><td>与 Speculative Decoding 的关系</td><td>SD 的拒绝采样保证最终分布不变 —— 采样参数照常生效（见 <a href="speculative-decoding.html">SD 页 L4</a>）</td></tr>
+    <tr><td>min-p（新趋势）</td><td>按 top1 概率的倍率截断（如 0.1×top1）—— 对尖峰分布比 top-p 更稳，2024 年后逐渐流行</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>模型输出的是分布：softmax 把 logits 变概率，保序不保距（L1）</li>
+      <li>温度是变形旋钮：T→0 尖峰贪心、T 大摊平放开冷门 —— 差距的放大镜/缩小镜（L2）</li>
+      <li>top-k 固定条数、top-p 累积圈选：分布形状不同谁都可能出错，top-p 自适应更稳（L3）</li>
+      <li>组合心法：温度管「敢不敢」，top-p 管「圈子多大」；任务定调，先 T 后 p（L4）</li>
+      <li>temperature=0 ≠ 完全确定（浮点非确定性）；min-p 是新的截断思路（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>logits</dt><dd>模型最后一层输出的未归一化分数，任意实数，softmax 的输入。</dd>
+    <dt>temperature (T)</dt><dd>logits 的除数。T&lt;1 锐化（确定），T&gt;1 摊平（随机），T→0 退化为 argmax。</dd>
+    <dt>top-k</dt><dd>只保留概率最高的 k 个 token 再重归一 —— 固定条数的截断。</dd>
+    <dt>top-p / nucleus sampling</dt><dd>按累积概率 p 圈选最小集合再重归一 —— 自适应截断（Holtzman et al. 2020）。</dd>
+    <dt>min-p</dt><dd>按 top1 概率的倍率设门槛（如 0.1×p_max）—— 对极尖峰分布更稳的新截断法。</dd>
+    <dt>贪心解码 (greedy)</dt><dd>永远选 argmax —— 确定性但易陷入重复循环。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="speculative-decoding.html">Speculative Decoding</a>（分布怎么被无损加速消费）· <a href="kv-cache.html">KV Cache</a>（分布诞生的显存代价）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Sampling · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="sampling.js"></script>
+</body>
+</html>
