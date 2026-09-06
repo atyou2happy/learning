@@ -342,6 +342,16 @@
       </div>
     </a>
 
+    <a class="topic-card" href="topics/crossentropy.html">
+      <span class="tc-arrow">→</span>
+      <div class="tc-level">训练地基 · loss 的物理含义</div>
+      <h3>交叉熵与困惑度</h3>
+      <p>全站训练叙事的地基公式：交叉熵 = −log₂P(正确词)，loss 的单位是 bits/token。surprisal 赌局（P=0.01 罚 6.64 bits）、真·训练模拟器（8 词表 25 步梯度下降，loss 3.00→0.18）、PPL = 2^loss 换算（5.7 = 每步在 5.7 个词里犹豫）、KL/温度/Scaling 纵轴统一进对数账本 —— 那条下降曲线第一次有了完整读法。</p>
+      <div class="tc-footer">
+        <span>真·训练循环</span><span>surprisal 赌局</span><span>≈ 8 分钟</span>
+      </div>
+    </a>
+
     <div class="topic-card" style="opacity:.45;cursor:default">
       <span class="tc-arrow">…</span>
       <div class="tc-level">规划中</div>

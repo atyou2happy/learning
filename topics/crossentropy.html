@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交叉熵与困惑度 — loss 曲线在算什么</title>
+<meta name="description" content="交叉熵 = −log P(正确词)：全站训练叙事的地基公式。surprisal 赌局直觉、玩具训练循环 25 步真梯度下降、PPL=2^loss 换算、bits/token 压缩视角、KL/温度同族 —— Scaling 纵轴 / PPL 表 / RLHF 缰绳统一在对数账本单位。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 赌局</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 公式</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 训练</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 换算</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 统一</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>cross-entropy</div>
+    <div class="topic-kicker">训练地基 · loss 的物理含义</div>
+    <h1 class="topic-title">交叉熵与困惑度</h1>
+    <p class="topic-sub"><a href="pretraining.html">Pretraining 页</a>的「猜下一个词」、<a href="scaling.html">Scaling Laws 页</a>整条 power law 曲线、<a href="quantization.html">Quantization 页</a>的 PPL 5.7→5.9 —— 全站在同一个目标函数上运行了 30 多页：<strong>交叉熵 = −log P(正确词)</strong>。这一页打开它：loss 的单位是 bits/token（信息量），<strong>PPL（困惑度）= 2^loss</strong> —— 「模型每一步在几个词里犹豫」。看完这页，所有训练曲线的纵轴都有了读法。</p>
+    <div class="topic-meta">
+      <span class="tag">真·训练循环模拟器</span>
+      <span class="tag">surprisal 赌局</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="pretraining.html" style="color:inherit">Pretraining</a> · <a href="sampling.html" style="color:inherit">Sampling</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">赌局：−log P 的计分直觉</h2></div>
+  <p class="level-goal">本层目标：对「重罚」建立手感。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · surprisal 计分表：猜对概率 vs 罚分（bits）</div>
+    <canvas id="surpCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">「猜下一个词」是一场赌局，计分规则 <strong>surprisal = −log₂P</strong>：全押对（P=1）零罚分；一半对（P=0.5）罚 1 bit；只敢押 1% 的冷门词却对了 —— 罚 <strong>6.64 bits</strong>（node 实算）。曲线形状是关键：<strong>概率趋近 1 时罚分平缓趋零，概率趋近 0 时罚分爆炸</strong> —— 对模型的训练信号就是这句话：把概率质量押给真正会出现的词，押得越准罚分越少。loss = 全语料每个位置 surprisal 的平均。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>模型给正确词的概率是 0.01（但说对了），surprisal 罚多少？这说明优化器「想」干什么？</p>
+    <div class="options">
+      <button class="opt">罚 0.01 分 —— 只要对了就不罚</button>
+      <button class="opt">罚 6.64 bits —— 概率越低罚越狠（对数爆炸）；优化器拼命想把大概率押给会出现的词，押中越罕见的事得分越高</button>
+      <button class="opt">罚 1 分 —— 罚分与概率无关</button>
+    </div>
+    <div class="explain">这就是「压缩」： surprisal 是描述这件事所需的最短编码长度 —— 模型越会猜，语料就能压得越短。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">公式：从 logits 到分数的流水线</h2></div>
+  <p class="level-goal">本层目标：认清全站的同一个流水线。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · logits → softmax → 取正确词 → −log₂</div>
+    <canvas id="pipeCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">四步流水线：<strong>总线状态 × lm_head → logits → softmax(·/T) → 概率 → −log₂P(正确词)</strong>。前半段你已经在 <a href="residual.html">残差流页</a>（读出器）和 <a href="sampling.html">Sampling 页</a>（softmax）见过 —— <strong>同一个函数，三页三种用法</strong>：Sampling 页用温度 T 调尖度（生成多样性）、Attention 页用 √d 防饱和（梯度健康）、幻觉页 T→0.1 看错误峰值 —— 本页只把它当计分器读数。梯度也美：∂loss/∂logit = p − onehot —— <strong>概率减去正确答案的 one-hot，错多少补多少</strong>，下一层亲手转它。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>梯度 ∂loss/∂logit = p − onehot(正确词)，物理含义是？</p>
+    <div class="options">
+      <button class="opt">概率越高梯度越大</button>
+      <button class="opt">梯度方向随机，靠学习率修正</button>
+      <button class="opt">「错多少补多少」：正确词概率 0.125 时梯度 +0.875（往上推），其他词按自己占的概率往下拉 —— 概率质量守恒地搬家</button>
+    </div>
+    <div class="explain">softmax 的分母让全表梯度之和为 0 —— 搬家不增不减。下一层的训练模拟器就是这个式子在转。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">训练：25 步真梯度下降</h2></div>
+  <p class="level-goal">本层目标：亲眼看着 loss 下降、概率搬家。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 玩具训练循环（8 词表，lr=0.4，点按钮单步执行）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="trBtn" class="opt" style="border:1px solid var(--border)">训练一步 →</button>
+      <button id="trRun" class="opt" style="border:1px solid var(--border)">跑满 25 步</button>
+      <button id="trReset" class="opt" style="border:1px solid var(--border)">重置</button>
+    </div>
+    <canvas id="trainCanvas" style="width:100%;height:290px"></canvas>
+    <p class="viz-note">不是动画 —— <strong>是真的在跑梯度下降</strong>（与 node 验证脚本同一段代码）：8 个词、正确词 idx2、初始 logits 全 0（均匀分布）。每次点击执行 p − onehot 更新：step 0 loss = <strong>3.00 bits（= log₂8，均匀瞎猜）</strong>，step 6 过半（50.9%），step 24 loss 0.18、P(正确词) 88.4%。<strong>「loss 下降」的机制第一次肉眼可见：概率质量从均匀摊开一步步搬到正确词上</strong> —— 预训练的本质是同一件事在万亿 token 上做，只是「正确词」每步都在换。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>初始 loss 恰好是 3.00 bits —— 为什么？</p>
+    <div class="options">
+      <button class="opt">log₂8：8 个词均匀分布（每个 12.5%）时，−log₂(1/8) = 3 bits —— 「均匀瞎猜」就是 loss 的天然起点</button>
+      <button class="opt">学习率恰好是 0.4</button>
+      <button class="opt">初始化惯例规定为 3</button>
+    </div>
+    <div class="explain">任何模型开局都在 log₂(词表) 附近 —— Llama-3 词表 128k 的开局线是 17 bits（Tokenizer 页那个 17 的另一重身份）。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">换算：PPL = 2^loss 的读法</h2></div>
+  <p class="level-goal">本层目标：会读论文和量化表里的 PPL。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 同一条 loss 曲线的两种纵轴</div>
+    <canvas id="pplCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note"><strong>PPL = 2^loss</strong>（bits 口径）—— 把「平均罚分」翻译成人话：「每一步在几个等价词里犹豫」。对账（node 实算）：loss 3.0 = PPL 8；<strong>Quantization 页的 PPL 5.7 = loss 2.51 bits</strong> —— 每步在 5.7 个词里犹豫，量化到 4bit（5.9）犹豫只多 0.2 个词，这就是「≈免费」的含义。旗舰级模型 ≈ 2.0-2.5 bits/token = <strong>把语料压到 1/4 ~ 1/6</strong> —— loss 的单位就是压缩率，Tokenizer 页 17 bits 是天花板（均匀瞎猜），压缩即智能的数学实体。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>PPL 从 5.7 涨到 5.9（4bit 量化），为什么说「几乎免费」？</p>
+    <div class="options">
+      <button class="opt">因为 5.9 - 5.7 很小</button>
+      <button class="opt">换回 loss 只差 0.05 bits/token（2.51→2.54）—— 每步犹豫从 5.7 个词变 5.9 个词；显存却省一半 —— 用 2% 的「犹豫税」换 50% 的空间</button>
+      <button class="opt">PPL 不是重要指标</button>
+    </div>
+    <div class="explain">读 PPL 表的正确姿势：永远在脑内做一次 log₂ —— 对数尺度上判断贵贱。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">统一：全站的对数账本</h2></div>
+  <p class="level-goal">本层目标：认出所有出现过的 log 亲戚。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 凡是比较两个分布，都是这个公式</div>
+    <canvas id="familyCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">对账表：<strong>Scaling 页</strong>整条 L(C) 曲线的纵轴就是交叉熵（10 倍算力换 11% 相对 loss 降，现在你知道降的单位是 bits/token）；<strong>RLHF 页</strong>的 KL 缰绳 = Σp·log(p/q)（node 实算例 0.133 bits）—— 同一个 log 家族在「别跑太远」里的用法；<strong>Sampling/Attention/幻觉</strong>三页的 softmax 温度是同一函数的生成侧用法；<strong>Tokenizer 17 bits / Pretraining 压缩即智能 / Chinchilla tok/param</strong> 全部以 bits 计价。<strong>LLM 训练的全部叙事 = 在对数刻度上做微积分</strong> —— 这就是那条下降曲线的全部含义。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>KL 散度、交叉熵、surprisal 三者的关系？</p>
+    <div class="options">
+      <button class="opt">三个完全不同的指标</button>
+      <button class="opt">KL 和交叉熵相同，surprisal 不同</button>
+      <button class="opt">surprisal 是单次罚分（−log p），交叉熵是它的期望（平均罚分），KL = 交叉熵 − 数据自身熵（多出的罚分）—— 一家人，三个粒度</button>
+    </div>
+    <div class="explain">单点 → 平均 → 与理想编码的差：同一个 log，三种记账方式。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>交叉熵 = −log₂P(正确词)：surprisal 赌局，P=0.01 罚 6.64 bits（L1）</li>
+      <li>梯度 = p − onehot：「错多少补多少」，概率质量守恒搬家（L2）</li>
+      <li>开局 loss = log₂(词表)：均匀瞎猜 3 bits（8 词）/ 17 bits（128k）（L3）</li>
+      <li>PPL = 2^loss：5.7 = 每步在 5.7 个词里犹豫 = 压缩到 1/5.7（L4）</li>
+      <li>KL/温度/Scaling 纵轴全是 log 家族 —— 训练叙事在对数刻度上展开（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>交叉熵 (cross-entropy)</dt><dd>H = −Σ p·log q，此处退化为 −log P(正确词) —— 预训练的 loss 函数。</dd>
+    <dt>surprisal / 自信息</dt><dd>−log₂p：单次事件的信息量 —— 罕见事件携带更多信息。</dd>
+    <dt>困惑度 (perplexity, PPL)</dt><dd>2^loss —— 「每步在几个等价词里犹豫」的人话翻译。</dd>
+    <dt>bits/token</dt><dd>loss 的单位 —— 每个词平均需要的编码长度，压缩率的倒数。</dd>
+    <dt>KL 散度</dt><dd>两个分布差的 bits 计价 —— RLHF 缰绳、蒸馏损失的同族公式。</dd>
+    <dt>熵 (entropy)</dt><dd>分布自身的最小平均编码长度 —— 交叉熵的下界（不可压缩部分）。</dd>
+    <dt>teacher forcing</dt><dd>训练时用真实答案（非模型输出）作为下一步输入 —— 每个位置都有监督信号的前提。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="pretraining.html">Pretraining</a>（这个 loss 在万亿 token 上转）· <a href="scaling.html">Scaling Laws</a>（纵轴的单位层）· <a href="sampling.html">Sampling</a>（同一 softmax 的生成侧）· <a href="quantization.html">Quantization</a>（PPL 表的正确读法）· <a href="rlhf.html">RLHF</a>（KL 缰绳同族）· <a href="tokenizer.html">Tokenizer</a>（17 bits 天花板）· <a href="residual.html">残差流</a>（logits 的来源）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · cross-entropy · 图解版 · loss 的物理含义</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="crossentropy.js"></script>
+</body>
+</html>

@@ -38,6 +38,7 @@
 - [FFN 键值记忆](topics/ffn.html) — 架构深处 · 知识的实体基础 · 键值检索动画 + ROME 知识编辑模拟器（前置：Attention）
 - [浮点精度](topics/precision.html) — 数值地基 · fp32/bf16/fp8 比特账 · 精度放大镜 + 梯度生死簿 + TFLOPS 阶梯（前置：Quantization）
 - [残差流](topics/residual.html) — 架构三部曲终章 · 4096 维总线 · 望远镜求和 + logit lens 逐层透视 + 多车道协议（前置：Attention + FFN）
+- [交叉熵与困惑度](topics/crossentropy.html) — 训练地基 · loss 的物理含义 · surprisal 赌局 + 真·训练模拟器 + PPL=2^loss 换算（前置：Pretraining + Sampling）
 
 ## 页面结构（五层）
 
