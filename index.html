@@ -42,10 +42,30 @@
       </div>
     </a>
 
+    <a class="topic-card" href="topics/mostik.html">
+      <span class="tc-arrow">→</span>
+      <div class="tc-level">模型协作 · 隐空间通信</div>
+      <h3>Mostik 隐空间桥接</h3>
+      <p>每个 token 只放行 17 bits，模型内部 2MB 的理解被丢弃。俄罗斯团队 Mostik 让 753B 大模型读题、4B 小模型写作，隐态直接过桥 —— 等效算力成本 40%。</p>
+      <div class="tc-footer">
+        <span>图解 + 数据</span><span>2026.09 新技术</span><span>≈ 10 分钟</span>
+      </div>
+    </a>
+
+    <a class="topic-card" href="topics/flash-attention.html">
+      <span class="tc-arrow">→</span>
+      <div class="tc-level">LLM 训练 &amp; 推理 · Kernel</div>
+      <h3>FlashAttention</h3>
+      <p>注意力没变，变的是它在 GPU 上的走法：不物化 N² 矩阵、online softmax 增量更新、计算搬进快 10 倍的 SRAM。显存从 N² 到 N，训练提速 2~3 倍。</p>
+      <div class="tc-footer">
+        <span>图解 + 公式</span><span>tiling 动画</span><span>≈ 12 分钟</span>
+      </div>
+    </a>
+
     <div class="topic-card" style="opacity:.45;cursor:default">
       <span class="tc-arrow">…</span>
       <div class="tc-level">规划中</div>
-      <p>FlashAttention / Continuous Batching / Mamba / 采样策略 …… 挑一个「你以为懂了」的概念开刀。</p>
+      <p>Continuous Batching / Mamba / 采样策略 …… 挑一个「你以为懂了」的概念开刀。</p>
       <div class="tc-footer"><span>规划中</span></div>
     </div>
 

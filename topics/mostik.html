@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mostik — 大模型隐空间桥接</title>
+<meta name="description" content="Mostik：模型间直接共享内部状态，绕过 token 瓶颈。753B 负责理解、4B 负责生成，算力成本降至等效方案的 40%。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 瓶颈</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 证据</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 桥接</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 数字</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 落地</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Mostik</div>
+    <div class="topic-kicker">MODEL BRIDGING · LATENT COMMUNICATION · 2026.09</div>
+    <h1 class="topic-title">Mostik 隐空间桥接</h1>
+    <p class="topic-sub">俄罗斯数学家团队的初创公司 Mostik 提出让两个模型跳过文字、直接交换内部状态：753B 的 GLM-5.2 只负责读题（prefill），4B 的 Qwen-3.5 负责写作（decode），中间一座可训练的「桥」翻译隐态。两个模型全程冻结 —— 桥是唯一的学生。</p>
+    <div class="topic-meta">
+      <span class="tag">图解 + 数据</span>
+      <span class="tag">2026.09 新技术</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">参考：mostik.ai + WIRED</span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">瓶颈：每个 token 只让 17 bits 离开模型</h2></div>
+  <p class="level-goal">本层目标：一张漏斗图，看清「模型想的远多于说的」这个信息瓶颈。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 2MB 内态 → 17 bits 输出的信息漏斗</div>
+    <canvas id="bottleneckCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">生成一个 token，模型内部先构建 100+ 个隐向量（约一百万个数、~2MB 内部状态），最后只从 15 万词表里选一个 token 输出 —— log₂(150000) ≈ 17 bits，其余全部丢弃，永不再用。两个模型协作时，全部「理解」只能挤过这个针眼。</p>
+  </div>
+
+  <div class="formula">
+    单 token 信息流出 ≈ log₂(vocab) ≈ 17 bits &nbsp;vs&nbsp; 内部状态 ≈ 2 MB = 16,000,000 bits &nbsp;⇒&nbsp; 压缩比 ~10⁶ : 1
+    <span class="ann">文本交接 = 强迫模型把全部理解压进 17 bits/token，接收方再从这几行字重建整个问题空间</span>
+  </div>
+
+  <blockquote class="intuition">
+    <p><strong>关键认知</strong>：今天的多模型系统（Agent 委派、级联、Council）全部通过文本协作 —— 文本是人类接口，不是模型接口。Mostik 的问题：模型之间为什么要说人话？</p>
+  </blockquote>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么说文本交接对模型间协作是「窄带通信」？</p>
+    <div class="options">
+      <button class="opt">文本太长会超过上下文窗口</button>
+      <button class="opt">文本生成速度慢，每秒只能出几十个 token</button>
+      <button class="opt">模型内部约 2MB 的计算状态只能表达成 17 bits/token 的文字，绝大多数理解在出口处丢失</button>
+    </div>
+    <div class="explain">瓶颈不是长度也不是速度，是表达力：内部表示是连续高维向量，token 是离散符号。序列化成文字本身就是一次 10⁶:1 的有损压缩。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">证据：隐态里早就有文字没有的东西</h2></div>
+  <p class="level-goal">本层目标：两个可解释性研究，确认「丢弃隐态 = 丢弃信息」不是猜想。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 模型提前规划：写出 a/an 之前，答案已在隐态里</div>
+    <canvas id="planCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">上：选择「a / an」的模型必须提前知道后面的名词 —— 可解释性研究发现表示早在写出前几个 token 就已形成（Hanna &amp; Ameisen, ICLR 2026），且模型越大效应越强；Anthropic 团队在 Claude 3.5 Haiku 里发现同样的机制：写诗前先定韵脚（Lindsey et al., 2025）。</p>
+  </div>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>证据一 · 提前规划</h4>
+      <p>Qwen-3 在写出 "an accountant" 前几个 token，隐态里已携带「accountant」的表示 —— 正是它驱动了 "an" 的选择。<b>隐态先于文字、多于文字。</b></p>
+    </div>
+    <div class="card">
+      <h4>证据二 · 跨模型可译</h4>
+      <p>Mostik 的桥在不微调任何模型的前提下成功翻译 GLM-5.2 → Qwen-3.5 隐态，说明不同团队、不同数据训出的模型，内部表示<b>已天然相似到可互译</b> —— 桥只是找到了这份既有结构。</p>
+    </div>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>「模型间天然存在可翻译性」的最强证据是什么？</p>
+    <div class="options">
+      <button class="opt">两个模型的词表大小差不多</button>
+      <button class="opt">桥接实验在两个模型完全冻结（不微调）时仍成功传输了有用信息</button>
+      <button class="opt">大模型和小模型的参数量不同</button>
+    </div>
+    <div class="explain">冻结是关键实验设计：模型没被适配到信道上，信息还能通过 —— 说明桥利用的是两个模型<b>本来就有</b>的共享结构，而不是训练硬造的接口。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">桥接：prefill 归大模型，decode 归小模型</h2></div>
+  <p class="level-goal">本层目标：一张架构图，记住「谁做什么、什么被训练」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · GLM-5.2 (753B) — Bridge — Qwen-3.5 (4B)</div>
+    <canvas id="archCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">分工来自推理经济学的不对称：<b>读</b> prompt 是一次并行 pass（753B 也便宜），<b>写</b> token 是逐个生成（4B 快而省）。大模型读完题把隐态送上桥就停笔，小模型接过上下文直接开写。</p>
+  </div>
+
+  <div class="formula">
+    只训桥: LLM₁ (冻结) → Bridge(θ) → LLM₂ (冻结) &nbsp;&nbsp;·&nbsp;&nbsp; θ 是系统中唯一可学习参数
+    <span class="ann">工程意义: 不动两个生产模型的任何权重 —— 升级、回滚、组合都只关系到桥这一层</span>
+  </div>
+
+  <h3><span class="sec-idx">3.1</span>与熟悉概念的对照</h3>
+  <table>
+    <tr><th>方案</th><th>桥在哪</th><th>要重训模型？</th><th>交接介质</th></tr>
+    <tr><td>MoE 专家路由</td><td>训练时长在模型内部</td><td class="bad">要（端到端）</td><td>内部隐态（天然）</td></tr>
+    <tr><td>文本 hand-off（Agent 委派）</td><td>没有桥，靠提示词</td><td class="ok">不要</td><td class="bad">token 文本（17 bits/token）</td></tr>
+    <tr><td><strong>Mostik 隐态桥</strong></td><td><strong>外挂翻译层</strong></td><td class="ok"><strong>不要（双冻结）</strong></td><td class="ok"><strong>隐向量（~2MB/级）</strong></td></tr>
+  </table>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么 Mostik 选择「大模型只读、小模型只写」而不是反过来？</p>
+    <div class="options">
+      <button class="opt">读是并行 pass（即使 753B 也相对便宜），写是逐 token（4B 便宜且快）—— 成本结构决定的分工</button>
+      <button class="opt">因为大模型不会写作</button>
+      <button class="opt">因为小模型读不懂长 prompt</button>
+    </div>
+    <div class="explain">这正是 KV Cache 页讲过的 prefill/decode 不对称：prefill 一次并行可摊薄，decode 逐 token 是持续成本。让贵的算力做便宜的事、便宜的算力做量大的事。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">数字：桥接组合的性价比</h2></div>
+  <p class="level-goal">本层目标：四个关键数字 + 一条全程占优的曲线。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 结果数字墙（mostik.ai 公开实验）</div>
+    <canvas id="resultsCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">四个数字一套逻辑：桥接组合弥合大小差距的一半；小模型自身准确率 +25%；越难的题提升越大（难题子集 2x）；而达到同等得分只需等效中模型 40% 的算力。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 隐态交接 vs 文本交接：全算力区间 Pareto 占优</div>
+    <canvas id="tradeoffCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">在每一档「给大模型的算力」下，隐态交接都不差于文本交接；<b>交接越早优势越大（最高 +10pp）</b> —— 因为早期大模型还没写出任何字，文本交接两手空空，隐态里却已积累了读题的理解。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>为什么交接发生得越早，隐态交接比文本交接的优势越大？</p>
+    <div class="options">
+      <button class="opt">因为早期序列短，注意力算得快</button>
+      <button class="opt">早期大模型还没写出任何 token，文本交接没有东西可传；而读题的理解已积累在隐态里</button>
+      <button class="opt">因为早期小模型的上下文窗口还有大量空闲</button>
+    </div>
+    <div class="explain">文本交接的传输量 = 已写出的字；隐态交接的传输量 = 已形成的理解。交接点越早，两者差距越悬殊 —— 这直接证明隐态携带文字尚未表达的信息。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：部署模式与未解问题</h2></div>
+  <p class="level-goal">本层目标：两种部署形态 + 冷静的局限清单。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 两种部署模式：同机低延迟 / 跨端点传输</div>
+    <canvas id="deployCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">模式 A 适配在线服务：重算力花在 prefill 上，token 生成留在快而省的小模型。模式 B 适配可容忍批式延迟的场景：隐态经网络在独立端点间传输，小模型可跑在任何空闲 GPU（含旧卡）上。</p>
+  </div>
+
+  <h3><span class="sec-idx">5.1</span>未解问题（官网自己承认的）</h3>
+  <table>
+    <tr><th>问题</th><th>现状</th></tr>
+    <tr><td>因果性未证实</td><td>能证明隐态信息「存在且被传过去了」，尚未通过干预实验证明接收方「使用」了它 —— 官网明言这是下一步</td></tr>
+    <tr><td>桥的泛化</td><td>一个桥只连一对模型；换模型对需重训桥。不同架构/规模组合的成本尚无公开数据</td></tr>
+    <tr><td>安全影响</td><td>绕过语言层 = 绕过基于文本的审查与对齐监控 —— 隐态里传了什么，现有工具看不见</td></tr>
+    <tr><td>可观测性机会</td><td>桥接产生三个新对象（发送方隐态/译后隐态/接收方行为），干预-观察可成为新的模型可解释性手段</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>token 是人类接口不是模型接口：每 token 只放行 17 bits，内部 2MB 理解被丢弃 —— 多模型协作全挤在这根针眼里（L1）</li>
+      <li>可解释性研究证明隐态先于且多于文字；不同模型的隐态天然可互译 —— 桥是发现结构，不是发明结构（L2）</li>
+      <li>分工由推理经济学决定：753B 只 prefill、4B 管 decode、桥是唯一被训练的部件，两模型冻结（L3）</li>
+      <li>数字：弥合差距 50%、小模型 +25%、难题 2x、等效算力 40%；对文本交接全程 Pareto 占优，早期交接 +10pp（L4）</li>
+      <li>开放问题：因果干预实验未做、桥按模型对重训、隐态传输绕过文本审查 —— 新技术该带新审慎（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>latent / hidden state</dt><dd>模型内部的连续向量表示。每个 token 伴随约 2MB 的隐态，输出时绝大部分被丢弃。</dd>
+    <dt>prefill / decode</dt><dd>读题（并行、一次完成）与写作（逐 token、持续成本）—— 推理成本的不对称来源。</dd>
+    <dt>文本 hand-off</dt><dd>多模型系统的传统协作方式：把已生成的文字传给下一个模型。带宽 = 17 bits/token。</dd>
+    <dt>冻结 (frozen)</dt><dd>训练桥时不更新任何 LLM 权重 —— 证明桥利用的是模型既有结构。</dd>
+    <dt>Pareto 占优</dt><dd>在所有算力档位下性能都不差于对照 —— 不存在「省了这边亏了那边」的权衡区。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">延伸：Mostik 由俄罗斯数学团队创立，General Catalyst 等投资，WIRED 2026-09 首次外部报道。与本站 <a href="kv-cache.html">KV Cache</a>、<a href="pagedattention.html">PagedAttention</a>（单模型显存管理）相对，它讲的是<b>模型之间</b>的通信经济学。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Mostik · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="mostik.js"></script>
+</body>
+</html>

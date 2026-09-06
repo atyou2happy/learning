@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlashAttention — 让注意力既快又省的 IO 革命</title>
+<meta name="description" content="FlashAttention：tiling + online softmax，显存从 N 平方降到 N。公式、图解、动画与基准数据。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 显存墙</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 瓶颈在读</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 两大招式</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 为什么快</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 落地</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>FlashAttention</div>
+    <div class="topic-kicker">LLM TRAINING &amp; INFERENCE · KERNELS</div>
+    <h1 class="topic-title">FlashAttention</h1>
+    <p class="topic-sub">注意力本身没变，变的是它在 GPU 上的走法：不物化 N 平方矩阵、把 softmax 拆成可增量更新的统计量、让计算在快 10 倍的 SRAM 里发生。显存从 N 平方降到 N，同硬件训练提速 2~3 倍，长文本从装不下变成装得下。</p>
+    <div class="topic-meta">
+      <span class="tag">图解 + 公式</span>
+      <span class="tag">tiling 动画</span>
+      <span class="tag">约 12 分钟</span>
+      <span class="tag">前置：<a href="kv-cache.html" style="color:inherit">KV Cache</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">显存墙：N² 的分数矩阵是原罪</h2></div>
+  <p class="level-goal">本层目标：一张图 + 一张表，看清标准注意力在长序列下的显存爆炸。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 序列长度 vs 注意力显存（GQA 32Q/8KV 头, d=128, fp16）</div>
+    <canvas id="wallCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">红线（标准实现）随 N² 陡增：32k 序列需要 <strong>128.6 GB</strong>，远超 A100-80GB 上限；绿线（FlashAttention）线性：同样 32k 只需 <strong>0.63 GB</strong>。差距 206 倍。</p>
+  </div>
+
+  <table>
+    <tr><th>序列长度</th><th>标准实现（QKV+S+P）</th><th>FlashAttention（仅 QKV）</th><th>倍差</th></tr>
+    <tr><td>4k</td><td>2.08 GB</td><td>0.08 GB</td><td>27x</td></tr>
+    <tr><td>8k</td><td>8.16 GB</td><td>0.16 GB</td><td>52x</td></tr>
+    <tr><td>16k</td><td>32.3 GB（近满卡）</td><td>0.31 GB</td><td>103x</td></tr>
+    <tr><td>32k</td><td class="bad">128.6 GB（爆卡）</td><td class="ok">0.63 GB</td><td>206x</td></tr>
+  </table>
+
+  <blockquote class="intuition">
+    <p><strong>关键认知</strong>：爆显存的不是 QKV（线性），是中间产物 <b>S=QKᵀ</b> 和 <b>P=softmax(S)</b> —— 两个 N×N 矩阵、每个 Q 头各一份。只要它们必须「整体存在」，显存就锁死在 O(N²)。</p>
+  </blockquote>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么标准注意力的显存是 O(N²)？</p>
+    <div class="options">
+      <button class="opt">Q、K、V 三个矩阵本身就是 N² 大小</button>
+      <button class="opt">中间产物 S=QKᵀ 与 P=softmax(S) 是 N×N 矩阵，每头一份且必须整体物化在 HBM</button>
+      <button class="opt">softmax 必须读到全部 N² 个分数才能开始计算</button>
+    </div>
+    <div class="explain">QKV 是 N×d（线性）；真正 N² 的是 S/P。第三个选项是表象：softmax 分母需要全列 max/sum，「看似」必须全量物化 —— LAYER 3 会证明这是错觉。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">瓶颈不在算，在读：GPU 存储层级</h2></div>
+  <p class="level-goal">本层目标：一张层级图 + 一个算术对比，接受「注意力是访存受限」这个反直觉事实。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · A100 存储金字塔：快的小，慢的大</div>
+    <canvas id="hierCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">SRAM 19 TB/s 但只有 192 KB；HBM 80 GB 但只有 2 TB/s。<strong>数据搬运速度只有计算速度的零头</strong> —— 谁少搬数据谁赢。</p>
+  </div>
+
+  <div class="formula">
+    标准实现 HBM 流量: 读 Q,K,V + 写 S + 读 S + 写 P + 读 P,V ≈ <b>9 × N²</b> 次 &nbsp;&nbsp;vs&nbsp;&nbsp; FlashAttention: <b>O(N·d)</b> —— 少约 N/d 倍
+    <span class="ann">N=4096, d=128 时：HBM 访问少 32 倍；矩阵乘 FLOPs 一个不少 —— 这是「IO-aware」的含义：不省计算，省搬运</span>
+  </div>
+
+  <div class="grid cols-3">
+    <div class="card">
+      <div class="num-big">312</div>
+      <p>A100 TFLOPS 峰值（fp16）—— 算力从不是瓶颈</p>
+    </div>
+    <div class="card">
+      <div class="num-big">2.0<span style="font-size:22px">TB/s</span></div>
+      <p>HBM 带宽 —— 决定每秒能喂多少数据给计算单元</p>
+    </div>
+    <div class="card">
+      <div class="num-big">19<span style="font-size:22px">TB/s</span></div>
+      <p>SRAM 带宽 —— 快 10 倍，但装不下整头矩阵，只装得下「块」</p>
+    </div>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>同一个注意力算式，为什么换个实现方式能快 3 倍？FLOPs 不是一样多吗？</p>
+    <div class="options">
+      <button class="opt">FlashAttention 用了近似算法，少算了分数</button>
+      <button class="opt">它把矩阵转成了更快的稀疏格式</button>
+      <button class="opt">FLOPs 相同，但 HBM 读写次数降了一个量级 —— 时间花在搬运上，不在计算上</button>
+    </div>
+    <div class="explain">FlashAttention 是<b>精确算法</b>（bitwise 等价）。快的原因是 memory-bound 场景下「算得快」没用，要「搬得少」：块装进 SRAM，S/P 永不落 HBM。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">两大招式：tiling 分块 + online softmax</h2></div>
+  <p class="level-goal">本层目标：流程对比图 + 递推公式 + 动画，看懂「不物化」怎么做到。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 标准流程 vs Flash 流程：S/P 的命运分岔</div>
+    <canvas id="flowCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">上：标准实现每步都把 N² 矩阵写回 HBM 再读回来（8 次往返）。下：块只进 SRAM，算完即弃 —— HBM 只见 Q、K、V、O。</p>
+  </div>
+
+  <h3><span class="sec-idx">3.1</span>招式一 · tiling：把矩阵切成 SRAM 装得下的块</h3>
+  <div class="viz">
+    <div class="viz-title">图 4 · 分块计算动画（点击画布推进 24 块）</div>
+    <canvas id="tilingCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">Q 按行块、K/V 按列块：每对 (行块, 列块) 在 SRAM 里算一次小注意力和一次融合。<strong>块大小 ~128×128 是 SRAM 容量决定的</strong>，与序列长度无关 —— 这就是显存变线性的原因。</p>
+  </div>
+
+  <h3><span class="sec-idx">3.2</span>招式二 · online softmax：流式更新的三个统计量</h3>
+  <div class="viz">
+    <div class="viz-title">图 5 · 递推公式与数值演示（数学上与全量 softmax 完全等价）</div>
+    <canvas id="onlineCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">softmax 的分母是全局和，看似必须看全 —— 实则 max(m) 与和(ℓ) 都可以<b>随块增量修正</b>：新块出现更大值时，旧统计量整体乘 e^(旧max−新max) 重新缩放。O 是分母就绪前的「未归一化加权和」，最后统一除 ℓ。</p>
+  </div>
+
+  <div class="formula">
+    每块: S_块 = Q_行块 @ K_列块ᵀ → 更新 m, ℓ → O_行块 修正累加 → 丢弃 S_块
+    <span class="ann">全程只保存 (m, ℓ, O) 三个 O(d) 级统计量 —— N² 的 S/P 从未完整存在过</span>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>online softmax 遇到新块里出现比当前 m 更大的分数时，正确做法是？</p>
+    <div class="options">
+      <button class="opt">把已累计的 ℓ 和 O 乘上 e^(m_旧−m_新) 缩放，再继续累加新块</button>
+      <button class="opt">从头重算全部已处理块的 softmax</button>
+      <button class="opt">丢弃旧统计量，只用新块的</button>
+    </div>
+    <div class="explain">缩放因子 e^(m_old−m_new) 恰好抵消旧贡献中过期的分母 —— 图 5 数值演示里 [1,2,3] 的终值与全量公式到小数点后 4 位一致。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">为什么快：精确 + 线性 + IO-aware</h2></div>
+  <p class="level-goal">本层目标：三大性质定位图 + 与「近似方法」的分界线。</p>
+
+  <table>
+    <tr><th>方法</th><th>显存</th><th>精确？</th><th>典型加速</th></tr>
+    <tr><td>标准注意力</td><td class="bad">O(N²)</td><td>精确</td><td>1x（基线）</td></tr>
+    <tr><td>sparse / local / linear 近似</td><td>O(N)~O(N·w)</td><td class="bad">近似（有损）</td><td>快但质量降</td></tr>
+    <tr><td>Memory-efficient（Rabe-Stanford）</td><td>O(N)</td><td>精确</td><td>受限于反复读写</td></tr>
+    <tr><td><strong>FlashAttention</strong></td><td class="ok">O(N)</td><td class="ok">精确（bitwise 等价）</td><td class="ok">训练 2~3x，推理 prefill 数倍</td></tr>
+  </table>
+
+  <blockquote class="intuition">
+    <p><strong>定位</strong>：近似方法在「改数学」换速度，FlashAttention 在「改走法」保数学 —— 论文标题里的 IO-aware 就是这个意思。它的加速不来自少算，来自少搬。</p>
+  </blockquote>
+
+  <div class="formula">
+    HBM 访问: 标准 Θ(N·d + N²) → Flash Θ(N²d²/M)（M=SRAM 大小）—— d=128, M=192KB 时约降 32 倍
+    <span class="ann">FLOPs 不变的前提下，运行时间 ∝ 内存访问量 —— 这就是 kernel-level 优化的全部秘密</span>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>FlashAttention 与 sparse/linear attention 类近似方法最本质的区别是？</p>
+    <div class="options">
+      <button class="opt">它把注意力头数减少了</button>
+      <button class="opt">它用 int8 降低了精度</button>
+      <button class="opt">它不改变注意力数学（逐位等价），只改变数据在 GPU 存储层级间的搬运路径</button>
+    </div>
+    <div class="explain">近似方法丢注意力连接换速度；FlashAttention 一个分数都不丢 —— 所以它成了长上下文时代的默认底座：越长的序列，越不能有损。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：版本演进与你能感知的变化</h2></div>
+  <p class="level-goal">本层目标：基准图 + 版本表 + 现实影响清单。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 同硬件相对标准实现的运行时加速（示意）</div>
+    <canvas id="benchCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">论文实测：GPT-2 small（125M）训练端到端 3x、GPT-2 1.5B 2.4x、BERT-large 15%（序列短收益小）；FA2 把非 matmul 开销打薄后 ~6.7x；FA3 用上 H100 异步 Warp Specialization 逼近 740 TFLOPS 硬件极限。</p>
+  </div>
+
+  <table>
+    <tr><th>版本</th><th>年份</th><th>关键改进</th><th>加速（相对标准）</th></tr>
+    <tr><td>FlashAttention-1</td><td>2022</td><td>tiling + online softmax + CUDA 融合核</td><td>训练 ~3x</td></tr>
+    <tr><td>FlashAttention-2</td><td>2023</td><td>减少非 matmul FLOPs、优化并行划分</td><td>~6.7x，GPU 利用率 50→72%</td></tr>
+    <tr><td>FlashAttention-3</td><td>2024</td><td>H100 异步执行、FP8、块间流水</td><td>~9.9x，逼近硬件极限</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>显存爆炸的元凶是 N² 的 S/P 中间矩阵，不是 QKV —— 不物化它们，显存就变线性（L1）</li>
+      <li>注意力是访存受限：SRAM 快 10 倍但只装得下块 —— 优化对象是搬运量不是计算量（L2）</li>
+      <li>tiling 切块进 SRAM + online softmax 增量修正 (m, ℓ, O) —— 全程无 N² 物化（L3）</li>
+      <li>精确而非近似：数学逐位等价，这是它取代近似方法成为默认底座的原因（L4）</li>
+      <li>训练 2~3x、长上下文从爆卡到装下；FA1→2→3 一路逼近硬件极限（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>memory-bound / 访存受限</dt><dd>时间由内存读写而非计算决定。长序列注意力是典型。</dd>
+    <dt>tiling / 分块</dt><dd>把大矩阵切成 SRAM 容得下的小块循环处理，中间产物不落 HBM。</dd>
+    <dt>online softmax</dt><dd>max 与分母和的流式递推更新，使 softmax 可逐块进行且与全量结果等价。</dd>
+    <dt>物化 (materialize)</dt><dd>把中间结果完整写进显存。标准注意力物化 S/P，Flash 从不。</dd>
+    <dt>IO-aware</dt><dd>以存储层级带宽差异为第一约束设计算法 —— 本文标题关键词。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相邻主题：<a href="kv-cache.html">KV Cache</a>（推理侧的显存账本）· <a href="pagedattention.html">PagedAttention</a>（KV 的分页管理）—— 三者构成「注意力 × 显存」三部曲。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · FlashAttention · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="flash-attention.js"></script>
+</body>
+</html>

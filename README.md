@@ -8,6 +8,8 @@
 
 - [KV Cache](topics/kv-cache.html) — LLM 推理 · 显存账本 · 交互计算器
 - [PagedAttention](topics/pagedattention.html) — LLM 推理 · 显存管理 · 三策略模拟器（前置：KV Cache）
+- [FlashAttention](topics/flash-attention.html) — LLM 训练/推理 · IO-aware kernel · tiling 动画（前置：KV Cache）
+- [Mostik](topics/mostik.html) — 模型协作 · 隐空间桥接 · 2026.09 新技术
 
 ## 页面结构（五层）
 
