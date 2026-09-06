@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>梯度爆炸与消失 — 深度学习 20 年头号难题</title>
+<meta name="description" content="梯度连乘账：30 层 ×1.5 = ×10^5 爆炸、×0.5 = ÷10^9 消失。链式法则病理、梯度生存模拟器、四种药（初始化/ReLU/归一化/残差 +I）、1991-2018 架构史 —— 每代创新都是治梯度，训练叙事的最后一块地基。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 病历</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 病理</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 模拟</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 药方</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 家族史</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>gradients</div>
+    <div class="topic-kicker">训练地基 · 梯度的两种死法</div>
+    <h1 class="topic-title">梯度爆炸与消失</h1>
+    <p class="topic-sub"><a href="crossentropy.html">交叉熵页</a>说「梯度=错多少补多少」，<a href="residual.html">残差流页</a>说「梯度沿加法直通」—— 但 <strong>梯度乘过 100 层会发生什么</strong>，全站还没算过：每层放大 1.5 倍，30 层后 ×10⁵（爆炸，NaN 崩训练）；每层缩到 0.5，÷10⁹（消失，浅层冻死学不动）。<strong>ReLU、BatchNorm、ResNet、Pre-LN —— 每一代架构创新的真正动机都是治这两种病</strong>。深度学习史，就是与梯度流斗争的历史。</p>
+    <div class="topic-meta">
+      <span class="tag">梯度生存模拟器</span>
+      <span class="tag">连乘账</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="crossentropy.html" style="color:inherit">交叉熵</a> · <a href="residual.html" style="color:inherit">残差流</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">病历：两种死法的现场</h2></div>
+  <p class="level-goal">本层目标：会分诊。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一个深网络，两种崩溃</div>
+    <canvas id="diagCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note"><strong>爆炸</strong>：loss 突然变 NaN，几步内崩溃 —— 大梯度触发大更新 → 更大梯度，正反馈失控（fp32 上限 3.4e38，1.5³⁰≈10⁵ 级的连乘两三步就冲破）—— 症状勐但好发现。<strong>消失</strong>：loss 慢慢降然后卡住，表面风平浪静 —— 但浅层权重的更新量已衰减到 10⁻⁹ 级，<strong>学了等于没学</strong>，网络实际只有末几层在动 —— 症状温和却致命，且最难察觉。一个像心脏病发，一个像慢性贫血。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>训练中 loss 卡住不动、模型表现平庸 —— 更可能是哪种病？</p>
+    <div class="options">
+      <button class="opt">爆炸 —— loss 会卡说明梯度太大</button>
+      <button class="opt">消失 —— 浅层梯度衰减到近零，只剩末端几层在学；爆炸的表现是 NaN 崩溃而不是卡住</button>
+      <button class="opt">学习率太小，与梯度无关</button>
+    </div>
+    <div class="explain">「卡住 ≠ 稳定」—— 慢性贫血最会伪装成平台期。下一层看病理。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">病理：链式法则的连乘</h2></div>
+  <p class="level-goal">本层目标：看懂病根是「乘法」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · ∂L/∂h₁ = Π Wᵢ·f′ᵢ 的 30 层账（node 实算）</div>
+    <canvas id="chainCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">反向传播 = 链式法则 = <strong>每层乘一次 Wᵢ·f′ᵢ，连乘 30 次</strong>。每层系数 g 的 30 次方（node 实算）：g=0.5 → <strong>9.3e-10</strong>（消失）；g=0.9 → 0.042（还是消失！0.9 也很危险）；g=1.0 → 守恒；g=1.5 → <strong>1.9e5</strong>（爆炸）。致命洞察：<strong>连乘没有「安全中间地带」</strong> —— 只要系统性偏离 1，深度就是放大器；sigmoid 的导数上界只有 0.25，30 层最坏 ×0.25³⁰ ≈ 10⁻¹⁸（消失之王）。病不在某一层，在「乘法」本身。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>每层系数 0.9 看起来「很接近 1」，30 层后为什么还是病？</p>
+    <div class="options">
+      <button class="opt">0.9 其实小于 1 很多为</button>
+      <button class="opt">因为学习率会放大它</button>
+      <button class="opt">连乘指数放大偏离：0.9³⁰ = 0.042 —— 96% 的梯度没了；深度把「轻微偏小」变成「几乎归零」，误差必须逐层精确抵消才能守恒</button>
+    </div>
+    <div class="explain">深度网络的脆弱性本质：容差随深度指数收缩 —— 所以需要的是结构性保证（L4 的药方），不是祈祷系数恰好在 1 附近。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">模拟：梯度生存读数</h2></div>
+  <p class="level-goal">本层目标：亲手转动放大系数看生死。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 30 层梯度生存模拟器（滑块调每层系数，log 刻度墙）</div>
+    <div style="margin:10px 0;display:flex;align-items:center;gap:10px">
+      <span style="font-size:13px;color:var(--text-dim)">每层系数 g</span>
+      <input type="range" id="gSlider" min="50" max="150" value="75" style="flex:1">
+      <span id="gVal" style="font-size:13px;font-family:monospace;color:var(--text)">0.75</span>
+    </div>
+    <canvas id="simCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note">纵轴 log 刻度：末层梯度（第 30 层，=1）流回第 1 层时的存活读数。拖动滑块：<strong>g=0.75 时第 1 层只剩 2×10⁻⁴</strong>（浅层半死）；g=1.0 全线持平（守恒）；g=1.5 时第 1 层收到 1.3×10⁵ 倍梯度（爆炸）。生死判读线：健康带 [0.1, 10] —— 30 层深度下这条带只有 <strong>g ∈ [0.92, 1.08]</strong>（10^(±1/30)）—— 「必须接近 1」不是建议，是数学。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>30 层网络的健康带是 g ∈ [0.92, 1.08]，100 层网络的健康带会？</p>
+    <div class="options">
+      <button class="opt">更窄：[0.95, 1.05] —— 深度越深，容差越紧（10^(±1/100)）—— 这就是「深网络天生难训」的定量形式</button>
+      <button class="opt">更宽：层数多平均掉了误差</button>
+      <button class="opt">不变</button>
+    </div>
+    <div class="explain">健康带宽度 = 10^(±1/L) —— 与层数成反比收紧。结构药方的意义就是把 g 钉死在 1。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">药方：四种药各治什么</h2></div>
+  <p class="level-goal">本层目标：建立「药-病」对应表。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 初始化 / ReLU / 归一化 / 残差 四药对照</div>
+    <canvas id="cureCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note"><strong>①正交/He 初始化</strong>：让 W 的缩放因子期望恰为 1（He: Var=2/fan_in，前向方差守恒；正交 W：WᵀW=I 反向范数守恒）—— 出生时健康，但训练中会漂移。<strong>②ReLU</strong>：导数 ∈ {0,1}，正区不饱和 —— 替换 sigmoid 的 0.25 上界（副作用：死神经元）。<strong>③归一化（BN/Pre-LN）</strong>：每层重新整流分布，把漂移拉回健康带 —— 治「训练中走坏」。<strong>④残差 +I</strong>（治本）：∂h_{l+1}/∂h_l = <strong>I + f′</strong> —— 特征值恒 ≥1，<strong>梯度地板</strong>：无论 f′ 多烂，直通路永远保底 —— <a href="residual.html">残差流页</a>「加法给梯度留路」的出处，152 层可训的原因。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>残差连接 ∂ = I + f′ 的「地板」保证，与初始化的「守恒」保证，本质区别是？</p>
+    <div class="options">
+      <button class="opt">没有区别，都是让梯度接近 1</button>
+      <button class="opt">初始化只保证出生那一刻守恒，训练随时可能漂走；+I 是结构性下界 —— f′ 可以任意坏，I 那一项永远在 —— 「药效终生」vs「出厂设置」</button>
+      <button class="opt">残差是给前向信号用的，与梯度无关</button>
+    </div>
+    <div class="explain">四种药叠用正是现代默认：He 初始化出生 + ReLU 不饱和 + Pre-LN 整流 + 残差地板 —— 四重保险。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">家族史：每代架构都是一味药</h2></div>
+  <p class="level-goal">本层目标：用「治梯度」重读架构史。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 1991 → 2018 时间线：病与药的对决</div>
+    <canvas id="histCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note"><strong>1991</strong> Hochreiter 首次系统分析（毕业论文级的开山）→ <strong>1997 LSTM</strong>：门控 + cell state 线性通路，梯度走「传送带」（残差思想的先驱）→ <strong>2011 ReLU</strong>：杀死 0.25 上界 → <strong>2015 BatchNorm</strong>：训练中稳住分布 → <strong>2015 ResNet</strong>：+I 恒等通路，152 层可训 → <strong>2018+ Pre-LN Transformer</strong>：归一化前置，现代训练稳定性的默认姿势。注意这条线的终点正是 <a href="residual.html">残差流页</a>的起点 —— <strong>Transformer 生在四重保险之上</strong>，所以 32 层只是日常。<a href="pretraining.html">Pretraining 页</a>「深网络能训」的前提，至此有了完整的账。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>LSTM 的 cell state 线性通路和 ResNet 的 +I，共同思想是？</p>
+    <div class="options">
+      <button class="opt">减少参数量</button>
+      <button class="opt">加速前向计算</button>
+      <button class="opt">给梯度留一条不经过任何乘法门的结构性直通路 —— 相隔 18 年的两个架构，治的是同一个病（连乘），用的是同一味药（恒等通路）</button>
+    </div>
+    <div class="explain">深度学习最重要的思想经常返场 —— 认出它的每一次出场，是读架构史的钥匙。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>爆炸 = NaN 崩溃（勐但好查）；消失 = 浅层冻死（静默更致命）（L1）</li>
+      <li>链式连乘：0.9³⁰ = 0.042 —— 连乘没有安全中间地带，深度放大一切偏离（L2）</li>
+      <li>30 层健康带 g ∈ [0.92, 1.08]，宽度 10^(±1/L) 与深度反比收紧（L3）</li>
+      <li>四药：He 初始化（出厂）、ReLU（不饱和）、归一化（整流）、残差 +I（结构性地板）（L4）</li>
+      <li>LSTM 传送带 = ResNet +I：相隔 18 年的同一味药 —— 每代架构都为治梯度而生（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>梯度消失 (vanishing gradient)</dt><dd>反向连乘使浅层梯度指数衰减 —— 浅层学不动。1991 年首次系统分析。</dd>
+    <dt>梯度爆炸 (exploding gradient)</dt><dd>连乘放大使梯度指数膨胀 —— 更新失控直至 NaN/inf。</dd>
+    <dt>链式法则 (chain rule)</dt><dd>复合函数求导 = 各层导数连乘 —— 两种病的共同来源。</dd>
+    <dt>He / Xavier 初始化</dt><dd>按 fan-in 定权重方差（2/fan_in 等），使每层缩放期望为 1 —— 出生守恒。</dd>
+    <dt>正交初始化</dt><dd>WᵀW = I —— 前后向都范数守恒的强保证。</dd>
+    <dt>梯度裁剪 (gradient clipping)</dt><dd>爆炸的对症药：梯度范数超阈值就缩放 —— RNN 时代标配。</dd>
+    <dt>Pre-LN</dt><dd>归一化放在子层之前（而非之后）—— Transformer 训练稳定性的现代默认。</dd>
+    <dt>cell state</dt><dd>LSTM 的线性状态通路 —— 梯度传送带，残差思想 1997 年的前身。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="residual.html">残差流</a>（+I 地板的宿主页）· <a href="crossentropy.html">交叉熵</a>（梯度的定义）· <a href="precision.html">浮点精度</a>（梯度下溢的数值层）· <a href="pretraining.html">Pretraining</a>（深网络能训的前提）· <a href="mamba.html">Mamba</a>（门控思想的 SSM 后裔）· <a href="crossentropy.html">交叉熵</a>（链式法则在此落地为 p−onehot）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · gradients · 图解版 · 训练叙事的最后地基</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="gradients.js"></script>
+</body>
+</html>

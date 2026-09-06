@@ -382,6 +382,16 @@
       </div>
     </a>
 
+    <a class="topic-card" href="topics/gradients.html">
+      <span class="tc-arrow">→</span>
+      <div class="tc-level">训练地基 · 梯度的两种死法</div>
+      <h3>梯度爆炸与消失</h3>
+      <p>梯度乘过 30 层会怎样：每层 ×1.5 → ×10⁵ 爆炸（NaN 崩训练）、×0.5 → ÷10⁹ 消失（浅层冻死）。连乘账没有安全中间地带（0.9³⁰=0.042），健康带随深度指数收紧 —— 四种药：He 初始化、ReLU、归一化、残差 +I 梯度地板。1991→2018 每代架构都是一味药，LSTM 传送带与 ResNet +I 相隔 18 年的同一味药。</p>
+      <div class="tc-footer">
+        <span>梯度生存模拟器</span><span>连乘账</span><span>≈ 8 分钟</span>
+      </div>
+    </a>
+
     <div class="topic-card" style="opacity:.45;cursor:default">
       <span class="tc-arrow">…</span>
       <div class="tc-level">规划中</div>
