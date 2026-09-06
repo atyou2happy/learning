@@ -23,6 +23,7 @@
 - [Pretraining / Scaling Laws](topics/pretraining.html) — LLM 训练 · 第一部曲 · 幂律曲线 + Chinchilla 审计（前置：Tokenizer）
 - [GPT-6 Astra](topics/gpt6.html) — 前沿模型 · 2026-09-03 发布 · 计算机使用范式 + 八项基准 + 成本悖论（前置：Agent）
 - [ViT / CLIP](topics/vit-clip.html) — 多模态 · 视觉基础 · patch 滑块 + CLIP 矩阵 + 视觉 token 账单（前置：Tokenizer）
+- [Diffusion](topics/diffusion.html) — 生成模型 · 扩散 · 加噪滑块 + CFG 引导 + 两范式对照（前置：ViT/CLIP）
 
 ## 页面结构（五层）
 

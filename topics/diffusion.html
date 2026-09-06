@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diffusion — 生成就是学会倒放噪声</title>
+<meta name="description" content="扩散模型：加噪/去噪滑块、噪声调度曲线、ε-预测网络、CFG 引导、SD→Flux→Sora 家族树、自回归 vs 扩散两范式对照。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 加噪</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 去噪</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 调度</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ CFG</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 两范式</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Diffusion</div>
+    <div class="topic-kicker">生成模型 · 另一半范式</div>
+    <h1 class="topic-title">Diffusion 扩散模型</h1>
+    <p class="topic-sub">Midjourney 一句话出图的原理听着神秘，拆开只有一句话：<strong>把图片逐步加噪声毁掉，再训练网络学会逐步擦掉噪声</strong>。生成 = 从纯噪声出发倒着走。这是与自回归完全对偶的另一半生成范式 —— 全图并行迭代 vs 逐 token 串行。拖动滑块，看猫一步步变成雪花，再理解它怎么走回来。</p>
+    <div class="topic-meta">
+      <span class="tag">加噪滑块</span>
+      <span class="tag">CFG 引导</span>
+      <span class="tag">约 12 分钟</span>
+      <span class="tag">前置：<a href="vit-clip.html" style="color:inherit">ViT/CLIP</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">加噪：亲手毁掉一只猫</h2></div>
+  <p class="level-goal">本层目标：拖动滑块，建立「t 越大信号越少」的直觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 正向过程 x₀ → x_T（拖 t 滑块，橙框跟随）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="tSlider" min="0" max="999" step="1" value="400" style="flex:1">
+      <span id="tLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:60px">t=400</span>
+    </div>
+    <canvas id="noiseCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">公式就一行：x_t = √ᾱ·x₀ + √(1−ᾱ)·ε —— 信号按 √ᾱ 缩、噪声按 √(1−ᾱ) 添，t=0 时信号 100%，t=999 时只剩 0.6%。妙处在于<strong>任何 t 都可以一步算出</strong>（高斯的加法性）—— 训练时不需要真的走 1000 步，随机抽个 t 直接合成。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么说扩散训练的监督信号也是「免费教材」？</p>
+    <div class="options">
+      <button class="opt">因为不需要 GPU</button>
+      <button class="opt">自己加的噪声自己知道 —— 网络的任务是猜出「我混进去的 ε」，答案在造题时就写好了；与 CLIP 的天然图文对、GPT 的下一词一样，无需人工标注</button>
+      <button class="opt">因为用公开数据集</button>
+    </div>
+    <div class="explain">自监督三兄弟：Pretraining 用语料本身（<a href="pretraining.html">Pretraining 页</a>）、CLIP 用网页配图（<a href="vit-clip.html">ViT/CLIP 页</a>）、Diffusion 用自己造的噪声 —— 全是「世界/任务自带的标签」。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">去噪：网络只学一件事</h2></div>
+  <p class="level-goal">本层目标：理解 ε-预测 —— 网络从不「画图」，只估计噪声。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · ε-网络的输入输出与剥噪公式</div>
+    <canvas id="denoiseCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">输入 (x_t, t, prompt)，输出对噪声的估计 ε̂；按公式从 x_t 里减掉它得到 x_{t-1}，重复一千次。「画猫」从来不是目标函数 —— 但要<strong>准确猜出噪声</strong>，网络必须知道「无噪声的合理图像长什么样」，于是世界知识被逼进了权重 —— 和「猜下一词逼出智能」（<a href="pretraining.html">Pretraining 页</a>）同一种哲学：proxy 任务比直接目标更有效。</p>
+  </div>
+
+  <div class="formula">
+    训练: L = ‖ε − ε̂(x_t, t, c)‖² · 生成: x_T ~ N(0,I) → 迭代 → x_0
+    <span class="ann">DDIM 把 1000 步压到 50 步（质量几乎不掉）；一致性模型/蒸馏再压到 1-4 步 —— 采样步数是扩散版的「思考预算」</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">调度：每一步剥多少噪声</h2></div>
+  <p class="level-goal">本层目标：看懂 ᾱ 曲线为什么重要 —— linear 与 cosine 的差别。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 噪声调度：linear vs cosine</div>
+    <canvas id="schedCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">β 是每一步加的噪声量，ᾱ=∏(1−β) 是信号保留率。linear 调度末端砸得太快（t=800 时信号只剩 3.9%），网络在末端几乎没东西可学；cosine 让中段平缓 —— <strong>每一步的任务量均匀，训练信号更稳定</strong>。这是「超参也值得发一篇论文」的经典案例。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么 t 也要作为输入喂给网络？</p>
+    <div class="options">
+      <button class="opt">为了计时</button>
+      <button class="opt">为了输出步数</button>
+      <button class="opt">同一个网络要处理所有噪声水平 —— t=100（轻噪）和 t=900（重噪）的最优策略完全不同，网络必须知道「现在在第几关」</button>
+    </div>
+    <div class="explain">这就是时间嵌入（timestep embedding）的作用 —— 一个网络干 1000 种难度的活，比训 1000 个网络便宜得多。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">CFG：prompt 的方向盘</h2></div>
+  <p class="level-goal">本层目标：拖动 w 滑块，理解引导强度从平淡到伪影的全程。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · Classifier-Free Guidance（拖 w 滑块看中间格变化）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="cfgSlider" min="1" max="15" step="1" value="7" style="flex:1">
+      <span id="cfgLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:50px">w=7</span>
+    </div>
+    <canvas id="cfgCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">网络跑两次：有 prompt（ε_cond）和无 prompt（ε_uncond），差值就是「prompt 指的方向」，再放大 w 倍。w=1 平淡听话，w=7 平衡（社区默认），w&gt;10 开始伪影饱和 —— <strong>「过度迎合 prompt」和 <a href="rlhf.html">RLHF 页</a>的 reward hacking 是同一种病：优化方向推过头，真实质量反而掉</strong>。prompt 由 CLIP/T5 编码 —— <a href="vit-clip.html">上一页</a>埋的钩子在此兑现。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">两范式：为什么文本自回归、图像扩散</h2></div>
+  <p class="level-goal">本层目标：从家族树看出范式分工，以及 2026 的边界松动。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 家族树 + 自回归 vs 扩散对照表</div>
+    <canvas id="familyCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">SD1.5（U-Net+CLIP）→ SDXL → SD3/Flux（<a href="vit-clip.html">DiT</a> —— 视觉 Transformer 全面接管 + 流匹配）→ Sora/Veo（时空 patch，视频当 3D token 处理）。对照表是本页的总结：自回归有 <a href="kv-cache.html">KV Cache</a>（推理便宜）、天然流式；扩散双向注意力一步出全局 —— 各自适配「离散序列」与「连续像素」。边界正在松动：LLaDA/Mercury 等扩散 LLM 在 A100 上 &gt;1000 tok/s（自回归的 10 倍），代价是无 KV Cache + 离散去噪更难 —— 谁吃掉谁，2027 见分晓。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>扩散 = 学会倒放：加噪毁图 x₀→x_T，训练网络擦噪声走回来（L1）</li>
+      <li>网络从不画图 —— 只猜 ε；猜准噪声必须懂「合理图像」，知识被逼进权重（L2）</li>
+      <li>调度曲线决定每步难度：cosine 比 linear 均匀，训练更稳（L3）</li>
+      <li>CFG = prompt 方向盘：w=7 平衡，过大和 reward hacking 同病（L4）</li>
+      <li>两范式对偶：自回归串行+KV Cache，扩散并行+双向注意力 —— 扩散 LLM 正在挑战（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>DDPM</dt><dd>去噪扩散概率模型 —— 2020 奠基论文，1000 步马尔可夫去噪。</dd>
+    <dt>ε-预测</dt><dd>网络的目标：估计混入的噪声而非干净图像 —— 训练更稳定的目标选择。</dd>
+    <dt>ᾱ (alpha bar)</dt><dd>信号保留率 ∏(1−β) —— 调度曲线的纵轴，x_t 公式的权重。</dd>
+    <dt>DDIM</dt><dd>非马尔可夫采样：跳步到 50 步质量几乎不掉；σ=0 时同 seed 同图。</dd>
+    <dt>CFG</dt><dd>无分类器引导：条件与无条件输出之差放大 w 倍 —— prompt 遵从度旋钮。</dd>
+    <dt>DiT</dt><dd>Diffusion Transformer —— 用 ViT 式 patch Transformer 替代 U-Net（SD3/Flux/Sora）。</dd>
+    <dt>流匹配 (flow matching)</dt><dd>把加噪-去噪推广为「概率流」的 newer 数学框架 —— SD3 起采用。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="vit-clip.html">ViT/CLIP</a>（文本引导的地基）· <a href="pretraining.html">Pretraining</a>（自监督哲学同源）· <a href="rlhf.html">RLHF</a>（CFG 过引导 = reward hacking）· <a href="kv-cache.html">KV Cache</a>（两范式成本差异的根源）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Diffusion · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="diffusion.js"></script>
+</body>
+</html>
