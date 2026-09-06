@@ -40,6 +40,7 @@
 - [残差流](topics/residual.html) — 架构三部曲终章 · 4096 维总线 · 望远镜求和 + logit lens 逐层透视 + 多车道协议（前置：Attention + FFN）
 - [交叉熵与困惑度](topics/crossentropy.html) — 训练地基 · loss 的物理含义 · surprisal 赌局 + 真·训练模拟器 + PPL=2^loss 换算（前置：Pretraining + Sampling）
 - [In-Context Learning](topics/icl.html) — 动态能力 · 推理时学习 · induction 电路动画 + 随机标签实验 + 双速账（前置：Attention + 残差流）
+- [Lost in the Middle](topics/litm.html) — 长上下文 · 注意力盲区 · U 形曲线 + needle 位置模拟器 + 排序工程清单（前置：Attention + RoPE）
 
 ## 页面结构（五层）
 

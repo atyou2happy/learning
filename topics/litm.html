@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lost in the Middle — 长上下文的注意力盲区</title>
+<meta name="description" content="Lost in the Middle：正确文档放中间检索率 46%、放两端 78%（Liu 2023 U 形曲线）。注意力稀释账（N×100 → 信噪比塌 34 倍）+ 距离衰减、needle 位置模拟器、2023 U 形 vs 2026 平坦对比、prompt 排序工程清单 —— 上下文长度 ≠ 有效长度。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 盲区</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 机制</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 复现</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 对策</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 读表</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>lost-in-middle</div>
+    <div class="topic-kicker">长上下文 · 注意力的盲区</div>
+    <h1 class="topic-title">Lost in the Middle</h1>
+    <p class="topic-sub"><a href="rope.html">RoPE 页</a>讲了上下文怎么撑到 128k，但<strong>撑得长 ≠ 读得好</strong>。Liu et al. 2023 的著名实验：把正确文档放在资料堆的<strong>开头或结尾，GPT-3.5 检索 ~78%；放在正中间，掉到 46%</strong> —— 比不看资料瞎猜还低。模型像人一样「只记得开头结尾」：softmax 被海量中间 token 摊平（稀释），距离衰减再补一刀。<strong>这一页讲清 U 形曲线的机制，并把它变成你排 prompt 的实操规则。</strong></p>
+    <div class="topic-meta">
+      <span class="tag">needle 位置模拟器</span>
+      <span class="tag">U 形 vs 平坦对比</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="attention.html" style="color:inherit">Attention</a> · <a href="rope.html" style="color:inherit">RoPE</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">盲区：128k 的星号条款</h2></div>
+  <p class="level-goal">本层目标：承认「长度」和「读得到」是两回事。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一份资料，位置决定命运（Liu et al. 2023）</div>
+    <canvas id="uCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">20 篇资料做问答，唯一含正确答案的文档换位置：开头 <strong>79%</strong> → 正中间 <strong>46%</strong> → 结尾 75% —— 完美的 U 形。最扎心的对照：closed-book（完全不给资料）基线 <strong>56%</strong> —— <strong>把答案放中间，模型的表现还不如不给他看</strong>（中间信息不仅没帮上忙，还成了干扰项）。「支持 128k 上下文」的宣传语背后，藏着这样一条没写出来的衰减曲线。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么说「放中间比不给还糟」？</p>
+    <div class="options">
+      <button class="opt">模型不喜欢中间位置</button>
+      <button class="opt">closed-book 56% 靠参数记忆猜；放中间 46% —— 检索失败之余，中间的正确文档还作为「众多资料之一」稀释了注意力，反而压制了记忆回忆</button>
+      <button class="opt">实验误差，两者其实一样</button>
+    </div>
+    <div class="explain">信息不是中性的：放错位置的正确答案会变成噪声 —— 这是 U 形最反直觉的读法。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">机制：稀释 + 衰减的两把刀</h2></div>
+  <p class="level-goal">本层目标：看懂 U 形从哪来。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 注意力稀释账（真 softmax 实算）+ 距离衰减</div>
+    <canvas id="dilCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note"><strong>刀一（稀释）</strong>：一个 score=3 的显著 token 在 10 个 token 里拿 <strong>69%</strong> 注意力；在 1000 个 token 里只剩 <strong>2%</strong>（node 实算）—— 上下文长 100 倍，同样的信息信噪比塌 34 倍：softmax 的分母是全序列，人多了声音就小（<a href="attention.html">Attention 页</a>的 √d 缩放在这里救不了你）。<strong>刀二（距离衰减）</strong>：相对距离 100 → 100k，位置权重 0.216 → 0.087 —— <a href="rope.html">RoPE 页</a>的低频维度让远处的匹配天然偏弱。两把刀叠加：开头（距离近）和结尾（距离近 + recency）各占一头优势，<strong>中间两头不靠</strong> —— U 形不是 bug，是机制的必然形状。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么开头和结尾各占优势，唯独中间塌？</p>
+    <div class="options">
+      <button class="opt">模型训练时把中间数据丢了</button>
+      <button class="opt">中间的 token 编码质量差</button>
+      <button class="opt">开头：距离衰减最弱 + ICL 电路最强（示例都在前部）；结尾：距离最近 + recency 最新 —— 中间两个优势都没有，还被两边分摊稀释</button>
+    </div>
+    <div class="explain">两端各持一把武器的反面，就是中间两手空空 —— 位置红利的不均匀分布。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">复现：needle 位置模拟器</h2></div>
+  <p class="level-goal">本层目标：亲手拖出曲线。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 把针拖到草堆任意位置（滑块）× 两个年代对比</div>
+    <div style="margin:10px 0;display:flex;align-items:center;gap:10px">
+      <span style="font-size:13px;color:var(--text-dim)">针的位置</span>
+      <input type="range" id="needleSlider" min="0" max="19" value="9" style="flex:1">
+      <span id="needlePos" style="font-size:13px;font-family:monospace;color:var(--text)">10/20</span>
+    </div>
+    <canvas id="needleCanvas" style="width:100%;height:260px"></canvas>
+    <p class="viz-note">needle-in-a-haystack：草堆 = 长噪声文本，针 = 一句关键事实。<strong>拖动滑块改变针的位置，读数实时变化</strong> —— 2023 的 GPT-3.5 走出完整 U 形（79→46→75）；<strong>2026 的旗舰模型（Kimi/DS-V3 级）曲线近乎平坦（~99%）</strong> —— 两年工程（训练数据里的长文档、位置感知的 attention scaling、检索强化）把盲区填平了大半。但注意：<strong>NIAH 测的是「存在检索」，不是「综合推理」</strong> —— 多文档交叉推理时 U 形仍以 softer 的形式存在（L5 展开）。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>2026 模型 NIAH 全位置 99%，能否 conclude「中间盲区已不存在」？</p>
+    <div class="options">
+      <button class="opt">不能：NIAH 是单针存在性检索，多针交叉推理/聚合任务上 U 形仍 softer 存在 —— 「测得到的平坦」≠「用得出的平坦」</button>
+      <button class="opt">能，99% 就是解决了</button>
+      <button class="opt">U 形本来就只在 GPT-3.5 上有</button>
+    </div>
+    <div class="explain">评测分数与实际能力的差 —— RoPE 页「NIAH ≠ 推理」钩子的兑现。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">对策：排序的工程学</h2></div>
+  <p class="level-goal">本层目标：把 U 形变成 prompt 排版规则。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 位置红利的用法清单</div>
+    <canvas id="fixCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note"><strong>①关键指令：开头 + 结尾重申</strong>（首因 + 近因两头占）——「按要求输出 JSON」放中间就是 46% 的命运。<strong>②RAG 重排序</strong>：检索命中的 chunk 别按相关度顺序平铺 —— <a href="rag.html">RAG 页</a>的 top-k 结果应「最重要的放两端」；<strong>③ICL 示例摆放</strong>：<a href="icl.html">ICL 页</a>的示例天然靠前（开头优势），最后一个示例离问题最近 —— 两者都免费吃到位置红利；<strong>④超长资料：分段 + 显式索引</strong>，别赌模型自己在 100k 里捞针。<strong>顺序是免费的性能</strong> —— 不改一个参数，检索率能差出一倍。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>RAG 检索回 top-5 chunk，按相关度从高到低平铺进 prompt —— 按 U 形逻辑该怎么改？</p>
+    <div class="options">
+      <button class="opt">保持原样，相关度顺序最自然</button>
+      <button class="opt">最相关的放最前和最后，中间塞次要的 —— 让 top-1 落在开头优势区、top-2 落在结尾优势区，避开中间塌陷带</button>
+      <button class="opt">随机打散避免偏差</button>
+    </div>
+    <div class="explain">重排序（rerank）的隐藏收益之一 —— 嵌入模型排的相关度，还要过一遍位置红利再排一次。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">读表：长度 ≠ 有效长度</h2></div>
+  <p class="level-goal">本层目标：会读长上下文的宣传与评测。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 两个指标的差距账</div>
+    <canvas id="readCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">读「支持 1M 上下文」的正确姿势：<strong>①上下文长度（能装）≠ 有效长度（能用）</strong> —— RoPE 外推解决「装得下」，U 形决定「读得好」；<strong>②看评测要分型</strong>：NIAH（单针检索，2026 普遍 99%）≠ 多针聚合 ≠ 长文档推理（仍随长度衰减）；<strong>③价格断层</strong>：各家 1M 档价格 ≈ 128k 档的 4-8 倍 —— 付费买的「长度」只有配合排序纪律才物有所值。<strong>上下文工程的一半是内容，另一半是位置</strong> —— 这一页是后者的全部。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>「上下文长度」和「有效长度」的关系，最准确的说法是？</p>
+    <div class="options">
+      <button class="opt">两者是同一个指标的不同叫法</button>
+      <button class="opt">有效长度永远等于宣传长度的 46%</button>
+      <button class="opt">长度是容量上限（位置编码决定），有效长度是利用率上限（注意力分布决定）—— 后者随任务复杂度衰减，两个数字各测各的</button>
+    </div>
+    <div class="explain">容量看 RoPE，利用率看 U 形 —— 两条独立的工程线，缺一不可。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>正确文档放中间 46%、放两端 ~78% —— U 形；比 closed-book 56% 还低（L1）</li>
+      <li>稀释：score=3 的 token 在 1k 上下文里只剩 2% 注意力 —— 信噪比塌 34 倍（L2）</li>
+      <li>距离衰减叠加：中间两头不靠 —— U 形是机制的必然形状（L2）</li>
+      <li>2026 NIAH 已平坦（99%）但多针推理仍 softer 衰减 —— 测得到的 ≠ 用得出的（L3）</li>
+      <li>顺序是免费的性能：关键指令首尾放、RAG 两端排 —— 检索率差一倍（L4）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>Lost in the Middle</dt><dd>Liu et al. 2023 —— 长上下文中段信息检索率塌陷的现象（U 形曲线）。</dd>
+    <dt>U 形曲线</dt><dd>位置-检索率关系：两端高、中间低 —— 首因 + 近因效应的注意力版。</dd>
+    <dt>needle-in-a-haystack (NIAH)</dt><dd>大海捞针评测 —— 在长噪声文本中检索单条关键事实。</dd>
+    <dt>注意力稀释 (attention dilution)</dt><dd>softmax 分母随序列长度增长，单个显著 token 的份额被摊薄。</dd>
+    <dt>首因 / 近因 (primacy / recency)</dt><dd>开头（距离衰减弱 + ICL 强）与结尾（距离近 + 最新）各自的位置红利。</dd>
+    <dt>重排序 (rerank)</dt><dd>检索后按另一个模型/规则重排 chunk —— 相关度 × 位置红利的复合排序。</dd>
+    <dt>有效长度 (effective context)</dt><dd>模型实际能可靠利用的上下文量 —— 小于等于宣传长度。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="attention.html">Attention</a>（softmax 摊平的来源）· <a href="rope.html">RoPE</a>（长度怎么撑的 + NIAH 钩子）· <a href="rag.html">RAG</a>（chunk 位置的红利）· <a href="icl.html">ICL</a>（示例天然吃开头红利）· <a href="kv-cache.html">KV Cache</a>（长上下文的显存代价）· <a href="hallucination.html">幻觉</a>（检索失败的另一面）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · lost-in-middle · 图解版 · 长上下文的盲区</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="litm.js"></script>
+</body>
+</html>
