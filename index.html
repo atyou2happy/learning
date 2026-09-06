@@ -302,10 +302,20 @@
       </div>
     </a>
 
+    <a class="topic-card" href="topics/mla.html">
+      <span class="tc-arrow">→</span>
+      <div class="tc-level">推理显存 · KV Cache 压缩</div>
+      <h3>MLA 潜在注意力</h3>
+      <p>DeepSeek 的 KV Cache 压缩绝招：不存原始 K/V，存 576 维潜在向量再矩阵吸收还原 —— 128 头一个不砍，缓存压 57 倍（488GB→8.6GB@128k）。671B 巨兽 KV 缓存反而是 70B 模型的 11% —— 「API 定价屠夫」的物理学，与 LoRA 同族的低秩数学。</p>
+      <div class="tc-footer">
+        <span>压缩-还原动画</span><span>四阶梯对比</span><span>≈ 8 分钟</span>
+      </div>
+    </a>
+
     <div class="topic-card" style="opacity:.45;cursor:default">
       <span class="tc-arrow">…</span>
       <div class="tc-level">规划中</div>
-      <p>数据管线 / 世界模型 / 分布式训练 …… 挑一个「你以为懂了」的概念开刀。</p>
+      <p>数据管线 / 世界模型 / 上下文工程 …… 挑一个「你以为懂了」的概念开刀。</p>
       <div class="tc-footer"><span>规划中</span></div>
     </div>
 

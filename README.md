@@ -34,6 +34,7 @@
 - [MCP](topics/mcp.html) — Agent 基础设施 · 开放协议 · M×N→M+N + 协议四步动画（前置：Agent）
 - [Hallucination](topics/hallucination.html) — 模型缺陷 · 幻觉 · 温度实验 + 药柜 + 共存策略（前置：Sampling）
 - [Speculative Decoding](topics/speculative.html) — 推理加速 · 投机解码 · 猜-验证动画 + α 滑块 2-3x（前置：Sampling + KV Cache）
+- [MLA](topics/mla.html) — 推理显存 · 潜在注意力 · KV 压缩 57 倍 + 屠夫账本（前置：KV Cache + Attention）
 
 ## 页面结构（五层）
 

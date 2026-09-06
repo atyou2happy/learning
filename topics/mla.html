@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLA — 多头潜在注意力</title>
+<meta name="description" content="MLA 多头潜在注意力：KV Cache 低秩压缩 57 倍、c_kv 576 维潜在向量、MHA→GQA→MQA→MLA 压缩阶梯、DS-V3 三件套 MoE+MLA+MTP、API 定价屠夫的物理学。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 生死题</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 阶梯</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 潜在</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 三件套</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 屠夫账</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>MLA</div>
+    <div class="topic-kicker">推理显存 · KV Cache 压缩终章</div>
+    <h1 class="topic-title">MLA 多头潜在注意力</h1>
+    <p class="topic-sub"><a href="kv-cache.html">KV Cache 页</a>讲过：缓存是推理显存的第一杀手。<a href="attention.html">Attention 页</a>讲过 MHA→GQA→MQA 的砍头阶梯 —— 但那是糙办法，砍 KV 头必然损失质量。DeepSeek V3 的 MLA 换了个思路：<strong>不存原始 K/V，存一个 576 维的「潜在向量」，用时再矩阵吸收还原</strong> —— 128 个头一个不砍，KV Cache 却压了 57 倍。这是 671B 巨兽能便宜到「定价屠夫」的物理学。</p>
+    <div class="topic-meta">
+      <span class="tag">压缩-还原动画</span>
+      <span class="tag">四阶梯对比</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="kv-cache.html" style="color:inline">KV Cache</a> · <a href="attention.html" style="color:inherit">Attention</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">生死题：671B 巨兽的显存账</h2></div>
+  <p class="level-goal">本层目标：看清压缩不是优化是生死。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · DS-V3 @ 128k 上下文的 KV 缓存</div>
+    <canvas id="whyCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">假如用标准 MHA：128 头 × 128 维 × 61 层 × 2(K+V) × 2 字节 = 每 token 3.9MB，128k 上下文就是 <strong>488GB</strong> —— 服务一个用户要 7 张 H100 只装缓存。实装 MLA 后：<strong>8.6GB，压了 57 倍</strong>。最恐怖的对照：参数大 10 倍的 671B 巨兽，KV 缓存反而是 Llama-3-70B 的 <strong>11%</strong> —— 巨兽比小兽更省，这就是「API 定价屠夫」的底牌。</p>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">阶梯：砍头 vs 换表示</h2></div>
+  <p class="level-goal">本层目标：分清两条压缩路线的本质差异。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 压缩阶梯（点按钮逐级看）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="ladBtn" class="opt" style="border:1px solid var(--border)">下一级 →</button>
+    </div>
+    <canvas id="ladderCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">MHA 128 头各自有 K/V（64KB/层）→ GQA 8 组共享（4KB，质量略降）→ MQA 1 组（0.5KB，质量明显降）—— <strong>砍头路线的极限就是牺牲质量</strong>。MLA 反其道：128 头全保留，把 K/V 换成 576 维潜在表示（1.1KB/层）—— 质量≈MHA、大小≈GQA-4 —— 两全其美的来源是下一层的低秩数学。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>GQA 和 MLA 都把缓存压到几 KB/层，本质区别是什么？</p>
+    <div class="options">
+      <button class="opt">MLA 压得更小</button>
+      <button class="opt">GQA 是「减配」：砍掉 KV 头，模型能力结构永久受损；MLA 是「换表示」：完整信息经低秩变换存进更小的子空间，128 头的注意力结构原样保留</button>
+      <button class="opt">MLA 是 DeepSeek 发明的</button>
+    </div>
+    <div class="explain">减配丢信息、换表示搬信息 —— 缓存大小相同，天花板完全不同。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">潜在：压进 576 维的子空间</h2></div>
+  <p class="level-goal">本层目标：看懂压-升的完整回路。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 压缩-还原动画（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="mlaBtn" class="opt" style="border:1px solid var(--border)">下一步 → (1/4)</button>
+    </div>
+    <canvas id="flowCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">① token 隐状态本可生成完整 K/V（32768 维）② 下投影 W^DKV 压成 <strong>c_kv 576 维</strong>（512 潜在 + 64 RoPE 旁路）③ 缓存里只存这个 —— 1.1KB/层 ④ 注意力计算时不用真的物化 K/V：<strong>W^UK 吸收进 q 投影、W^UV 吸收进 o 投影</strong>，矩阵乘法结合律重排后直接在潜在空间完成。这是 <a href="lora.html">LoRA 页</a>同族的数学：低秩分解 —— 32768 维的 K/V 其实「活」在 576 维子空间里。RoPE 位置旋转是位置相关的、压不进潜在空间，所以 64 维 rope 键走旁路。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">三件套：每件各砍一维成本</h2></div>
+  <p class="level-goal">本层目标：把三页知识拼成一台机器。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · MoE + MLA + MTP 咬合</div>
+    <canvas id="trioCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note"><a href="moe.html">MoE</a> 砍算力（671B 只激活 37B = 1/18）；MLA 砍显存（缓存 ×1/57）；<a href="speculative.html">MTP</a> 提速度（解码 ×3）。三件套互相正交、各治一维 —— <strong>巨大参数的智能 + 小模型的服务成本</strong>。三件在本站各有专页，这页是收口。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">屠夫账：价格战的物理学</h2></div>
+  <p class="level-goal">本层目标：会读「国产模型价格战」新闻的底层账。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 从架构到定价</div>
+    <canvas id="priceCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">KV 缓存 8.6GB 让 128k 长上下文服务成为可能（MHA 根本上不了线）；37B 激活让每 token 算力是同级的 5.5%；MTP 让吞吐再×3；2025-09 V3.2 加 DSA 稀疏注意力又砍一刀。<strong>反直觉总结：巨兽比小兽更省</strong> —— 参数是一次性摊薄成本，缓存才是每请求的经常性要害。下次看到「DeepSeek 又降价了」的新闻，你知道该看哪三行架构参数。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>KV 缓存是 671B 模型上线的生死题：MHA 要 488GB，MLA 8.6GB（L1）</li>
+      <li>砍头（GQA/MQA）是减配，换表示（MLA）是搬信息 —— 天花板不同（L2）</li>
+      <li>c_kv 576 维潜在向量 + 矩阵吸收：低秩数学，LoRA 同族（L3）</li>
+      <li>RoPE 压不进潜在空间 → 64 维 rope 键旁路（L3）</li>
+      <li>MoE+MLA+MTP 各砍一维：巨兽比小兽更省的物理学（L4/L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>MLA (Multi-head Latent Attention)</dt><dd>多头潜在注意力 —— KV 低秩压缩的注意力变体，DS-V2/V3 实装。</dd>
+    <dt>c_kv (潜在向量)</dt><dd>缓存里实际存的 576 维压缩表示 —— 512 潜在 + 64 rope。</dd>
+    <dt>矩阵吸收 (weight absorption)</dt><dd>W^UK/W^UV 并进 q/o 投影，避免物化 K/V —— MLA 推理快的关键。</dd>
+    <dt>低秩 (low-rank)</dt><dd>大矩阵 ≈ 两个瘦矩阵的积 —— LoRA 与 MLA 共享的数学。</dd>
+    <dt>DSA (DeepSeek Sparse Attention)</dt><dd>V3.2 的稀疏注意力 —— 长上下文注意力再压缩。</dd>
+    <dt>down/up 投影</dt><dd>W^DKV 压 / W^UK·W^UV 升 —— 压缩-还原回路的两个矩阵。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="kv-cache.html">KV Cache</a>（直接续集）· <a href="attention.html">Attention</a>（GQA 阶梯来源页）· <a href="moe.html">MoE</a>（三件套之一）· <a href="speculative.html">Speculative Decoding</a>（MTP 同源）· <a href="lora.html">LoRA</a>（低秩数学同族）· <a href="airllm.html">AirLLM</a>（671B=12GB 那行账）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · MLA · 图解版 · KV Cache 压缩终章</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="mla.js"></script>
+</body>
+</html>
