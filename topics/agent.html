@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent / Function Calling — 会做事的模型</title>
+<meta name="description" content="Agent 与 Function Calling：说话≠做事、FC 四步流水线、ReAct 循环动画、MCP 统一协议、失败模式与可靠性阶梯。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 差距</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 四步</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ ReAct</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ MCP</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 可靠性</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Agent</div>
+    <div class="topic-kicker">LLM 应用 · 智能体</div>
+    <h1 class="topic-title">Agent / Function Calling</h1>
+    <p class="topic-sub">问「北京今天多少度」，裸模型会编一个像模像样的答案 —— 它没有手臂，只会说话。Function calling 给模型装上 API 手臂：模型输出结构化调用意图，宿主代码真正执行，结果回填再生成。再配上 ReAct 循环，模型自己决定「何时查、查什么、够了吗」—— 这就是 2026 所有 AI 应用的骨架。</p>
+    <div class="topic-meta">
+      <span class="tag">ReAct 循环动画</span>
+      <span class="tag">MCP 一座桥</span>
+      <span class="tag">约 12 分钟</span>
+      <span class="tag">前置：<a href="rag.html" style="color:inherit">RAG</a> · <a href="reasoning.html" style="color:inherit">Reasoning</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">差距：说话 ≠ 做事</h2></div>
+  <p class="level-goal">本层目标：理解裸模型的边界 —— 输出 token 不是执行动作。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一个问题，裸模型 vs Agent</div>
+    <canvas id="gapCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note">裸模型的「知识」冻结在训练截止日（<a href="rag.html">RAG 页</a>的死穴）；它答今天的天气不是在查询，是在<strong>生成一段听起来像查询结果的话</strong>。Agent 的差别只有一个：真的调了 API。模型全程只做一件事 —— 决定何时伸哪只手臂。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>「模型调用了工具」这句话哪里不对？</p>
+    <div class="options">
+      <button class="opt">没有不对，模型确实执行了 API</button>
+      <button class="opt">不对，模型只是模拟了调用</button>
+      <button class="opt">模型从不执行任何东西 —— 它输出一段结构化文本（JSON 调用意图），执行的是宿主代码；「手臂」是普通程序</button>
+    </div>
+    <div class="explain">这是 agent 安全和工程的分界线：权限、重试、沙箱都在执行器层，不在模型里。模型是大脑，手臂是代码。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">四步：schema → 约束解码 → 执行 → 回填</h2></div>
+  <p class="level-goal">本层目标：点四下按钮，记住 FC 的完整闭环。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · Function Calling 四步流水线（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="fcBtn" class="opt" style="border:1px solid var(--border)">▶ 开始</button>
+    </div>
+    <canvas id="fcCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">第二步是精髓：约束解码（constrained decoding）在<strong>词表层面屏蔽非法 token</strong>（<a href="sampling.html">采样页</a>的工程应用）—— JSON 结构永远合法，模型不可能输出「北京」后面跟半截括号。第四步的结果回填让模型看到真实数据 —— 幻觉失去了立足点。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么说约束解码是「采样器的工程应用」？</p>
+    <div class="options">
+      <button class="opt">因为用到了 temperature</button>
+      <button class="opt">采样时把不合法的 token 概率置零（按 JSON 语法状态机）—— 和 top-k/top-p 截断同一机制，只是截断依据从概率变成语法</button>
+      <button class="opt">因为都发生在 GPU</button>
+    </div>
+    <div class="explain">top-k 说「概率太低不许出」，约束解码说「语法不对不许出」—— 同一个 logits 掩码操作，两种规则。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">ReAct：思考-行动-观察的循环</h2></div>
+  <p class="level-goal">本层目标：看模型自主完成一个多跳任务，理解「循环」为什么必要。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · ReAct 循环动画（点按钮逐步推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="reactBtn" class="opt" style="border:1px solid var(--border)">▶ 开始任务</button>
+    </div>
+    <canvas id="reactCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">「A 比 B 高多少」是<strong>多跳</strong>任务：必须先查到 A 才知道要查 B —— 单次 RAG 检索做不到（<a href="rag.html">RAG 页</a>埋的钩子在这兑现）。ReAct 让模型把大任务拆成循环：Thought 决定下一步，Action 伸手臂，Observation 回填证据。这是 <a href="reasoning.html">Reasoning 页</a>思考链的「外用版」：思考在上下文里，手臂在外面。</p>
+  </div>
+
+  <div class="formula">
+    Agent = LLM(循环) + 工具(手臂) + 记忆(上下文) · 终止条件由模型自己判断
+    <span class="ann">每轮全部历史重放 —— 8 轮任务累计 ~13.6k token 输入，KV 账单见 KV Cache 页</span>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">MCP：N×M 问题与一座桥</h2></div>
+  <p class="level-goal">本层目标：理解为什么需要统一协议 —— 「AI 的 USB-C」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 没有协议的网状地狱 vs MCP 一座桥</div>
+    <canvas id="mcpCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">每个模型有私有调用格式、每个工具有私有 API —— 20 模型 × 100 工具 = <strong>2000 份适配代码</strong>。MCP（Model Context Protocol）把中间抽成标准协议：每端只接一次，20+100 = <strong>120 份</strong>。新工具出现 → 所有模型立即可用。附带益处：工具生态爆发后，「从 1000 个工具里挑相关的」本身成了检索问题 —— <a href="rag.html">RAG 的反向应用</a>。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>工具数量爆炸后，「把全部工具 schema 塞进 prompt」为什么不行？</p>
+    <div class="options">
+      <button class="opt">上下文有限且注意力分散（工具一多选择准确率掉）—— 解法：工具检索，按当前任务动态选 top-k 个工具进 prompt，正是 RAG 的思路用在工具上</button>
+      <button class="opt">因为 JSON 会变大</button>
+      <button class="opt">因为模型记不住</button>
+    </div>
+    <div class="explain">1000 工具 × 每个几百 token schema = 数十万 token —— 超窗又贵。动态检索 top-10 工具进上下文，其余靠需再取。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：失败模式与可靠性阶梯</h2></div>
+  <p class="level-goal">本层目标：认清 agent 工程的真敌人 —— 链式可靠性。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 四大失败模式与防御</div>
+    <canvas id="failCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">提示注入最阴险：工具返回的网页内容里藏着指令（「忽略之前所有话…」）—— 模型分不清「数据」和「指令」。防御原则：<strong>外部内容永远降权为数据</strong>，高危操作（转账/删除/发送）必须人工确认。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 可靠性阶梯：单步 95% 连乘就塌</div>
+    <canvas id="ladderCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">0.95⁵ ≈ 77%，0.95¹⁰ ≈ 60% —— 长链任务的成功率数学上就难看。工程解法全在「补链」：检查点校验、失败重试、分支回滚、关键步人工介入 —— 和 <a href="reasoning.html">Reasoning 页</a>的思考预算一样，把可靠性当预算管理。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>模型从不执行任何东西 —— 它输出调用意图，手臂是宿主代码（L1）</li>
+      <li>FC 四步：schema → 约束解码出 JSON → 执行器真跑 → 结果回填再生成（L2）</li>
+      <li>ReAct 循环让模型自主拆解多跳任务：思考-行动-观察，终止自己判断（L3）</li>
+      <li>MCP 把 N×M 适配压成 N+M —— 「AI 的 USB-C」，工具生态因此爆发（L4）</li>
+      <li>链式可靠性 0.95⁵≈77% —— agent 工程的核心是补链不是骂模型（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>Function calling</dt><dd>模型输出结构化工具调用意图（JSON）的机制 —— 现代模型的原生能力。</dd>
+    <dt>ReAct</dt><dd>Reasoning + Acting 范式：Thought→Action→Observation 循环直到 Final。</dd>
+    <dt>约束解码</dt><dd>按语法状态机在词表上屏蔽非法 token —— JSON 永远合法的保障。</dd>
+    <dt>MCP</dt><dd>Model Context Protocol —— 模型与工具间的开放标准协议（「AI 的 USB-C」）。</dd>
+    <dt>提示注入</dt><dd>外部内容里藏指令劫持模型 —— 防御靠数据/指令隔离与白名单。</dd>
+    <dt>multi-agent</dt><dd>多个 agent 分工协作（规划/执行/审查）—— 用角色隔离降低单链长度。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="rag.html">RAG</a>（检索也是一只手臂）· <a href="reasoning.html">Reasoning</a>（思考链的内用版）· <a href="sampling.html">采样策略</a>（约束解码的同胞）· <a href="mostik.html">Mostik</a>（大小模型协作的第三种形态）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Agent · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="agent.js"></script>
+</body>
+</html>
