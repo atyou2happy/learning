@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=0.0">
+<title>Speculative Decoding — 推理提速的免费午餐</title>
+<meta name="description" content="投机解码：小模型猜词大模型并行验证、接受率 α 与 E=(1-α⁵)/(1-α) 级数、2-3x 加速的数学、Medusa/EAGLE/MTP 变体、失效场景。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 慢</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 猜-验</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ α 账</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 变体</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 失效</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Speculative Decoding</div>
+    <div class="topic-kicker">推理加速 · 免费午餐的数学</div>
+    <h1 class="topic-title">Speculative Decoding</h1>
+    <p class="topic-sub">同一张卡、同一个模型，凭空快 2-3 倍：小模型先猜一串词，大模型<strong>一次 forward 并行验证</strong>，猜对白赚、猜错回滚 —— 输出分布与不用它时完全一致。免费午餐的来源是 <a href="roofline.html">Roofline 页</a>讲过的事实：decode 是 memory-bound，读一遍权重只能出 1 个词；而验证 5 个词也只需要读一遍 —— <strong>带宽成本摊薄 5 倍</strong>。</p>
+    <div class="topic-meta">
+      <span class="tag">猜-验证动画</span>
+      <span class="tag">α 滑块</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="sampling.html" style="color:inherit">Sampling</a> · <a href="kv-cache.html" style="color:inherit">KV Cache</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">慢：decode 的串行困境</h2></div>
+  <p class="level-goal">本层目标：看清「每个词都读一遍权重」的浪费。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 逐词生成的账单</div>
+    <canvas id="slowCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">生成 5 个词 = 5 次完整权重读取（70B 就是 5×140GB 的带宽）。<a href="kv-cache.html">KV Cache 页</a>讲过：decode 每步的算术强度只有 ~1 flop/byte —— <a href="roofline.html">Roofline</a> 的左墙，GPU 大部分时间在等数据。而 prefill 是并行的：一次 forward 能同时算很多词 —— <strong>「检查 5 个词」和「生成 1 个词」读权重的次数一样多</strong>。这就是可乘之机。</p>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">猜-验证：双模型流水线</h2></div>
+  <p class="level-goal">本层目标：点按钮走完一轮投机。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 一轮投机（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="specBtn" class="opt" style="border:1px solid var(--border)">下一轮 →</button>
+    </div>
+    <canvas id="duelCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">小模型（draft，成本 ~5%）先连猜 4 个词；大模型一次 forward <strong>并行验证全部</strong>：绿 ✓ 接受、红 ✗ 从断点回滚并由大模型亲自写一个修正词。注意第 3 轮演示最坏情况：猜错第 1 个词，本轮只产出 1 个词（修正词），但也没亏多少 —— <strong>猜对白赚，猜错只赔小模型的时间</strong>。数学保证（<a href="sampling.html">Sampling 页</a>的拒绝采样）：接受规则的修正让最终分布与直接从大模型采样完全一致 —— 这是「免费」二字的底气。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么「验证 4 个词」几乎不比「生成 1 个词」贵？</p>
+    <div class="options">
+      <button class="opt">因为大模型更聪明</button>
+      <button class="opt">因为验证用的是小模型</button>
+      <button class="opt">因为 decode 是 memory-bound：两种操作的瓶颈都是「读一遍权重」，带宽成本相同；验证 4 个词只把这点带宽摊薄到 4 个词上 — 多出来的计算几乎免费</button>
+    </div>
+    <div class="explain">Roofline 左墙的情境下，「多算不亏」—— 计算富余、带宽稀缺，投机解码就是把这个富余变现的机器。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">α 账：接受率决定一切</h2></div>
+  <p class="level-goal">本层目标：拖滑块建立 α 直觉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 接受率曲线（拖 α 滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="alphaSlider" min="0.2" max="0.98" step="0.01" value="0.7" style="flex:1">
+      <span id="alphaLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:80px">α = 0.70</span>
+    </div>
+    <canvas id="alphaCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">每轮期望词数 E = (1−α⁵)/(1−α)：α=0.7 时 E=2.77，加上修正词共 ~3 个 —— 一轮成本 1.25 次大模型时间（1 大 + 5 小×5%），<strong>加速 2.2x</strong>；α=0.9 时冲到 3.3x；α<0.4 时跌破 1.2x 不值得开。α 是什么？<strong>小模型与大模型分布的兼容性</strong> —— 同家族小号配对（68M 猜 70B）才高，因为「见过同一个世界」。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">变体：猜得越来越准</h2></div>
+  <p class="level-goal">本层目标：认识三代演进与量产实装。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 家族谱</div>
+    <canvas id="familyCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">经典 SD（Leviathan/Chen 2023，2-3x）→ Medusa 多头一次长出候选树 → EAGLE-2 在<strong>特征级</strong>预测 + 树验证（3-5x）→ DeepSeek V3 的 MTP：训练时就带上预测头，模型天生会「预判下一个词」，vLLM/SGLang 2026 默认支持。与<a href="quantization.html">量化</a>、<a href="continuous-batching.html">连续批处理</a>完全正交 —— 可以叠加。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">失效：免费午餐的边界</h2></div>
+  <p class="level-goal">本层目标：知道什么时候别开。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · α 的塌方现场</div>
+    <canvas id="failCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">代码/结构化文本 α 高（分布尖锐可猜）；对话是甜点区；<strong>高温创意写作 α 塌方</strong>（温度拉平分布，小模型猜不中）；推理链在分歧点整段回滚。<strong>负加速真实存在</strong>：draft 太差时白付小模型成本。读推理服务定价时这是个隐藏变量：同一模型 API 的流式输出快慢，背后可能是投机解码开关的差异。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>decode memory-bound：读一遍权重只出 1 词 —— 浪费就是机会（L1）</li>
+      <li>小模型猜 4 词 + 大模型 1 次验证：猜对白赚，猜错回滚（L2）</li>
+      <li>拒绝采样保证输出分布不变 —— 提速不牺牲质量（L2）</li>
+      <li>E=(1−α⁵)/(1−α)：α=0.7→2.2x；同家族配对是 α 的来源（L3）</li>
+      <li>高温/开放生成 α 塌 —— 免费午餐有边界（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>draft model (草稿模型)</dt><dd>负责猜词的小模型 —— 同家族小号，成本 ~5%。</dd>
+    <dt>target model (目标模型)</dt><dd>负责验证的大模型 —— 输出分布的最终权威。</dd>
+    <dt>α (接受率)</dt><dd>草稿词被接受的概率 —— 两模型分布兼容性的度量。</dd>
+    <dt>拒绝采样修正</dt><dd>接受规则附带的数学保证：最终分布 = 直接采样大模型。</dd>
+    <dt>MTP (Multi-Token Prediction)</dt><dd>训练时内建的多词预测头 —— DeepSeek V3 量产路线。</dd>
+    <dt>EAGLE</dt><dd>特征级预测 + 树验证的第三代变体 —— 3-5x。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="sampling.html">Sampling</a>（拒绝采样的原班人马）· <a href="kv-cache.html">KV Cache</a>（为什么验证便宜）· <a href="roofline.html">Roofline</a>（memory-bound 是前提）· <a href="quantization.html">Quantization</a>（正交可叠加）· <a href="continuous-batching.html">Continuous Batching</a>（批处理红利）· <a href="airllm.html">AirLLM</a>（另一条省钱路线）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Speculative Decoding · 图解版 · 免费午餐的数学</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="speculative.js"></script>
+</body>
+</html>
