@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mamba / SSM — 不长大的记忆</title>
+<meta name="description" content="Mamba 与状态空间模型：KV Cache 的无限账单、恒定大小的隐状态（8000 倍差距）、递归公式、选择机制、吞吐曲线、2026 hybrid 混搭现状。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 账单</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 恒定状态</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 选择</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 吞吐</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 混搭</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Mamba</div>
+    <div class="topic-kicker">模型架构 · Transformer 挑战者</div>
+    <h1 class="topic-title">Mamba / SSM</h1>
+    <p class="topic-sub">KV Cache 的账单无限增长：128k 上下文 = 64GB，每 token 都留一份永不删除的档案。Mamba 反其道而行：<strong>固定大小的隐状态，永不长大</strong> —— 128k 时与 KV Cache 差 8000 倍。这是与 <a href="kv-cache.html">KV Cache 页</a>的终极对照：记忆的两种代价 —— 精确但臃肿 vs 有损但恒定。2026 的答案是：都要（hybrid）。</p>
+    <div class="topic-meta">
+      <span class="tag">状态增长滑块</span>
+      <span class="tag">吞吐曲线</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="kv-cache.html" style="color:inherit">KV Cache</a> · <a href="attention.html" style="color:inherit">Attention</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">账单：记忆能不能不长大？</h2></div>
+  <p class="level-goal">本层目标：重看 KV Cache 的账单，提出全站压轴的问题。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · KV Cache 的线性账单</div>
+    <canvas id="painCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note"><a href="kv-cache.html">KV Cache 页</a>的口径：7B MHA 每 token 0.5MB×32 层 —— 1k=0.5GB 温和，128k=64GB 离谱，而且<strong>这份账单随对话进行实时增长</strong>（<a href="pagedattention.html">分页</a>只能管理不能阻止）。人类不是这样记事的：读一本小说不会让脑子变大一倍。问题来了： Transformer 的记忆为什么必须「全文保存」？—— 因为 <a href="attention.html">attention</a> 要精确回看每一个 token，删掉任何一个都可能改变输出。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么 Transformer 不像人一样「压缩记忆」？</p>
+    <div class="options">
+      <button class="opt">因为工程师没想过</button>
+      <button class="opt">attention 的数学要求精确访问历史 —— 每个 Q 都可能与任意历史 K 匹配；任何有损压缩都会在某些输入下产生不可控偏差</button>
+      <button class="opt">因为显存够用</button>
+    </div>
+    <div class="explain">精确性是 attention 的天赋也是枷锁。想压缩就得换数学 —— 这正是 SSM 的入场券。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">恒定：RNN 的老思想换了新引擎</h2></div>
+  <p class="level-goal">本层目标：理解递归状态 + 为什么 RNN 死了而 SSM 活了。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 状态增长对比（拖序列长度滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="lenSlider" min="0" max="5" step="1" value="2" style="flex:1">
+      <span id="lenLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:70px">4k tok</span>
+    </div>
+    <canvas id="growCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">蓝线 KV Cache 随长度线性爬升；绿线 Mamba 状态恒定 0.008GB —— <strong>拖到 128k：64GB vs 0.008GB，8000 倍</strong>。状态大小与序列长度完全解耦。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 递归：一个公式装下全部历史</div>
+    <canvas id="recurCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">h_t = A·h_{t−1} + B·x_t —— 老式 RNN 的骨架：历史被「蒸馏」进固定大小的状态。但 RNN 死于<strong>训练无法并行</strong>（h_t 依赖 h_{t−1}，必须串行走完 T 步）。SSM 的复活术：线性系统的整段展开可以写成<strong>卷积形式</strong> —— 训练时一次并行算完所有位置（像 <a href="attention.html">attention 页</a>的掩码并行一样），推理时切回递归形态享受恒定状态。<strong>训练用并行形态、推理用递归形态 —— 两头的好处全占</strong>。</p>
+  </div>
+
+  <div class="formula">
+    训练形态: 卷积 (并行, 像 attention) · 推理形态: 递归 (恒定, 像 RNN) · 同一组参数两种展开
+    <span class="ann">Mamba 的选择性打破了卷积形式 —— 用并行扫描 (parallel scan, O(log T)) 补回并行性, 硬件感知实现是论文的核心工程贡献</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">选择：该记的记，该忘的忘</h2></div>
+  <p class="level-goal">本层目标：理解 Mamba 对经典 SSM 的关键改造。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · Δt 步长看输入下菜</div>
+    <canvas id="selectCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">经典 S4 的 A/B/C 参数固定 —— 对莎士比亚和代码用同一副记忆策略；Mamba 让它们<strong>依赖输入</strong>：「2024」「营收」大步写入（Δ 大），「的」「嗯」几乎跳过（Δ 小）。与 LSTM 门控神似，但 SSM 版本保住了训练并行性 —— 2020 代的数学给了 1990 代的想法一副新身体。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>「选择性」解决了 S4 的什么缺陷？</p>
+    <div class="options">
+      <button class="opt">固定参数无法根据内容取舍信息 —— 什么 都 一视同仁地压缩, 无法做「记住这个词忘掉那个词」的内容感知过滤</button>
+      <button class="opt">让它更快</button>
+      <button class="opt">让它更小</button>
+    </div>
+    <div class="explain">压缩的前提是取舍，取舍的前提是知道内容重要不重要 —— 固定参数的 SSM 只有压缩没有取舍，选择性补上了这块拼图。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">吞吐：长短序列的分水岭</h2></div>
+  <p class="level-goal">本层目标：从计算账理解两条吞吐曲线的交叉。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 吞吐 vs 序列长度</div>
+    <canvas id="thruCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">attention 每 token 回看全部历史（计算 ∝ L），Mamba 每步只碰固定状态（计算恒定）。计算账：L=128k 时 attention 每 token 537M 次乘加 vs Mamba 恒定 0.3M —— <strong>2000 倍差距</strong>，论文口径长序列吞吐 ~5x。短序列反过来：attention 的精确匹配在检索/上下文学习类任务上碾压 —— <a href="rag.html">RAG 页</a>那种「找回第 3 个 chunk 的原文」正是 SSM 的死穴（历史已被有损压缩，回不来了）。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">混搭：2026 的现实答案</h2></div>
+  <p class="level-goal">本层目标：记住 hybrid 配比与决策表，完成与全站的合流。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · Jamba 层带 + 决策表</div>
+    <canvas id="hybridCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">Jamba（AI21, 52B）的答案：1 个 attention : 7 个 Mamba —— 少量 attention 层保住精确检索，大量 Mamba 层享受恒定状态，256k 上下文。<a href="airllm.html">AirLLM 页</a>跑的 Qwen3.8-27B 用的 Gated DeltaNet 也是这个家族（线性注意力）。Mamba-2 的 SSD 算法更进一步：把 SSM 与 attention 统一进一个数学框架 —— <strong>界限还在模糊，「谁取代谁」正变成「怎么配比」</strong>。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>KV Cache 线性增长（128k=64GB）—— attention 精确回看的天赋是账单的枷锁（L1）</li>
+      <li>SSM 状态恒定 0.008GB：128k 时差 8000 倍 —— 训练并行（卷积）+ 推理递归两头像（L2）</li>
+      <li>Mamba = 选择性：A/B/C 看输入下菜，该记的记该忘的忘（L3）</li>
+      <li>吞吐分水岭：长序列计算差 2000 倍（~5x 实测），精确检索是 SSM 死穴（L4）</li>
+      <li>2026 现实是 hybrid：Jamba 1:7、DeltaNet 家族 —— 配比取代站队（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>SSM (状态空间模型)</dt><dd>用递归状态 h_t = A·h + B·x 建模序列 —— 记忆固定大小的连续系统。</dd>
+    <dt>选择性 (selectivity)</dt><dd>Mamba 的核心：状态转移参数依赖输入 —— 内容感知的记住/遗忘。</dd>
+    <dt>并行扫描 (parallel scan)</dt><dd>O(log T) 计算递归链的树形算法 —— 选择性 SSM 保住训练并行的关键。</dd>
+    <dt>d_state</dt><dd>每通道状态维度（典型 16）—— Mamba 的「记忆容量」旋钮。</dd>
+    <dt>hybrid 架构</dt><dd>attention 层与 SSM/线性注意力层混排 —— Jamba 1:7 是代表配方。</dd>
+    <dt>SSD (Mamba-2)</dt><dd>状态空间对偶 —— 把 SSM 与 attention 统一进半可分矩阵框架。</dd>
+    <dt>Gated DeltaNet</dt><dd>门控增量规则网络（线性注意力家族）—— Qwen3.8-27B 采用。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="kv-cache.html">KV Cache</a>（被对照的主角）· <a href="attention.html">Attention</a>（精确性的来源）· <a href="flash-attention.html">FlashAttention</a>（attention 侧的省 IO 努力）· <a href="airllm.html">AirLLM</a>（跑 DeltaNet 模型的极省显存方案）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Mamba/SSM · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="mamba.js"></script>
+</body>
+</html>
