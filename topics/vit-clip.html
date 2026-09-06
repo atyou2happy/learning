@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ViT / CLIP — 图像怎么进 token 世界</title>
+<meta name="description" content="多模态基础：ViT patch 切分、CLIP 双塔对比学习、零样本分类、GPT-6 看屏幕的视觉 token 账单、VLM 通用配方。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 鸿沟</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② patch</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ CLIP</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 零样本</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ VLM</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>ViT / CLIP</div>
+    <div class="topic-kicker">多模态 · 视觉基础</div>
+    <h1 class="topic-title">ViT / CLIP</h1>
+    <p class="topic-sub">Transformer 吃 token 序列，图像是 224×224×3 = 150,528 个数字的像素立方体 —— 中间缺一个「图像版的 BPE」。ViT 的答案是切 patch；CLIP 再进一步：4 亿图文对把猫的图片和「a cat」拉进同一个向量空间。GPT-6 Astra「看屏幕」的每一步，都建立在这两块地基上。</p>
+    <div class="topic-meta">
+      <span class="tag">patch 切分滑块</span>
+      <span class="tag">CLIP 相似度矩阵</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="tokenizer.html" style="color:inherit">Tokenizer</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">鸿沟：token 序列 vs 像素立方体</h2></div>
+  <p class="level-goal">本层目标：看清文本和图像进入模型前的形态差异。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 模型想要的 vs 图像给的</div>
+    <canvas id="gapCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">文本经过 <a href="tokenizer.html">Tokenizer 页</a>的 BPE 变成语义单元序列；图像的像素没有「词」—— 每个数字只是亮度采样，没有语义边界、没有天然顺序。CNN 时代用局部卷积绕过这个问题；Transformer 时代必须正面回答：<strong>图像的最小语义单元是什么？</strong></p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么不能把 150,528 个像素直接当 15 万个 token 喂给 Transformer？</p>
+    <div class="options">
+      <button class="opt">因为数值太大算不动</button>
+      <button class="opt">序列长度平方杀死 attention（15万² 的注意力矩阵，回忆 FlashAttention 页的 N² 显存墙），且单像素几乎不含语义 —— 注意力要学的关联全在噪声里</button>
+      <button class="opt">因为图像必须用 CNN</button>
+    </div>
+    <div class="explain">两个原因叠加：计算上 N² 爆炸（<a href="flash-attention.html">FlashAttention 页</a>），语义上单像素太「碎」。patch = 在计算与语义之间的折中粒度。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">ViT：把图像切成「句子」</h2></div>
+  <p class="level-goal">本层目标：拖动滑块，建立 patch 大小 ↔ token 数量的手感。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · patch 切分（拖动滑块换 patch 大小）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="patchSlider" min="0" max="4" step="1" value="2" style="flex:1">
+      <span id="patchLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:60px">16×16</span>
+    </div>
+    <canvas id="patchCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">224×224 图像按 16×16 切 → 14×14 = <strong>196 个 token</strong>，每个 patch 拉平成 768 维向量（16·16·3=768，恰好等于 ViT-Base 的 hidden size —— 经典选择的巧合之美）。滑到 8×8 有 784 token（细但贵），32×32 只要 49 个（便宜但糊）。加位置嵌入后，图像就成了一段「196 个词的句子」。</p>
+  </div>
+
+  <div class="formula">
+    N_tokens = (H/P) × (W/P) · 每 token 维度 = P²×3 · 序列再补一个 [CLS]
+    <span class="ann">patch 大小是视觉版的「词表粒度」：小 patch = 细粒度高成本，大 patch = 便宜但损失细节</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">CLIP：图文同空间</h2></div>
+  <p class="level-goal">本层目标：看懂双塔对比学习 —— 4 亿图文对的魔力。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 双塔对比学习与相似度矩阵</div>
+    <canvas id="clipCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">两座独立的塔：图像塔（ViT）和文本塔（Transformer），各自把输入编码成向量。训练目标（InfoNCE）只做一件事：让配对的图文相似度高（对角线绿格），不配对的低（红格）。batch=32768 时一次要对比 <strong>10.7 亿个负样本对</strong> —— 没有人工标注，网页上的天然图文对就是免费教材。这正是 <a href="rag.html">RAG 页</a>余弦相似度的多模态版：同一个空间，才能比距离。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么说 CLIP 的训练信号「免费」？</p>
+    <div class="options">
+      <button class="opt">网页图文天然成对（alt 文本、配图说明）— 4 亿对无需人工标注，与预训练「语料即教材」同一种哲学（Pretraining 页）</button>
+      <button class="opt">因为不要 GPU</button>
+      <button class="opt">因为数据是买的</button>
+    </div>
+    <div class="explain">自监督的精髓：世界本身已经标注了哪段文字配哪张图。CLIP 只是把这个天然配对变成了对比学习的正样本。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">零样本：现写候选就能分类</h2></div>
+  <p class="level-goal">本层目标：理解 CLIP 为什么不需要训练就能认新东西。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 零样本分类：一张从没见过的狐狸照片</div>
+    <canvas id="zeroshotCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">把候选类别写成句子（「a photo of a fox」…），各编码成向量，与图片向量算余弦 —— argmax 即分类。<strong>模型没上过一节分类课，ImageNet 零样本 76.2%</strong>。细节：候选文本本身是超参 —— 加一句「a type of animal」能再 +3pp（prompt 工程的 CLIP 版）。这个「现写候选」的能力，正是 <a href="gpt6.html">GPT-6</a>理解屏幕上任意按钮和菜单的基础。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · GPT-6 看屏幕的视觉 token 账单</div>
+    <canvas id="screenCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">同一眼 1080p 屏幕：patch 14 → 10,764 token，缩图 + patch 28 → 576 token，<strong>18.7 倍差距</strong>。计算机使用 agent 每一步都要「看一眼」，视觉 token 是它最大的隐形成本（对照 <a href="gpt6.html">GPT-6 页</a>的成本悖论）。缩图/大 patch 牺牲小字识别换速度 —— 和 <a href="reasoning.html">Reasoning 页</a>思考预算一样，是精度与成本的旋钮。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：VLM 通用配方</h2></div>
+  <p class="level-goal">本层目标：记住三段式配方，看懂所有多模态模型的视觉通路。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 视觉语言模型 = 三段流水线</div>
+    <canvas id="vlmCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">视觉编码器（ViT，常直接用 CLIP 预训练的）→ 投影层（把视觉向量对齐到 LLM 的词向量空间，MLP 或 Q-Former）→ LLM 主干（视觉 token 与文本 token 混排，对它来说没区别）。<strong>GPT-4V / Gemini / Astra 的视觉通路都是这三段</strong> —— 差异只在各段的尺寸与训练策略。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>图像没有「词」：150,528 个像素 vs token 序列 —— 缺图像版 BPE（L1）</li>
+      <li>ViT 切 patch：16×16 → 196 token，patch 大小 = 粒度与成本的旋钮（L2）</li>
+      <li>CLIP 双塔对比：4 亿免费图文对，10.7 亿负样本对一次训练（L3）</li>
+      <li>零样本 76.2%：现写候选文本就能分类 —— 候选也是超参（L4）</li>
+      <li>VLM 三段式：编码器 + 投影层 + LLM —— GPT-6「看屏幕」的全部地基（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>ViT (Vision Transformer)</dt><dd>把图像切 patch 当 token 序列处理的 Transformer —— 视觉编码器的事实标准。</dd>
+    <dt>patch</dt><dd>图像的最小处理单元（典型 14²/16² 像素）—— 图像版的「词」。</dd>
+    <dt>CLIP</dt><dd>对比图文预训练（Contrastive Language-Image Pretraining）—— 双塔共享一个向量空间。</dd>
+    <dt>InfoNCE</dt><dd>对比学习损失：正样本拉近、负样本推远，温度 τ 控制尖锐度。</dd>
+    <dt>零样本 (zero-shot)</dt><dd>不训练任何参数，仅靠候选文本编码 + 余弦最近邻完成分类。</dd>
+    <dt>投影层 / Q-Former</dt><dd>把视觉向量对齐到 LLM 词向量空间的适配模块 —— 多模态的「翻译官」。</dd>
+    <dt>视觉 token</dt><dd>patch 编码后的序列成员 —— 视觉账单的计量单位（对照 Tokenizer 页）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="tokenizer.html">Tokenizer</a>（文本侧的对照）· <a href="rag.html">RAG</a>（同一向量空间的检索应用）· <a href="gpt6.html">GPT-6 Astra</a>（看屏幕的实践者）· <a href="pretraining.html">Pretraining</a>（自监督的哲学同源）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · ViT/CLIP · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="vit-clip.js"></script>
+</body>
+</html>
