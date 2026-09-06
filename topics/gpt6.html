@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPT-6 Astra — 从回答模型到干活的智能体</title>
+<meta name="description" content="GPT-6 Astra（2026-09-03 发布）：计算机使用范式、基准实测、成本悖论、安全三重防线、巨头竞速与冷静清单。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 范式</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 基准</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 成本</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 安全</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 冷静</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>GPT-6 Astra</div>
+    <div class="topic-kicker">前沿模型 · 2026-09-03</div>
+    <h1 class="topic-title">GPT-6 Astra</h1>
+    <p class="topic-sub">OpenAI 用「欢迎来到 AGI 时代」收尾的发布：Astra 不再只是回答和调工具，而是<strong>直接看屏幕、操作软件、根据结果调整下一步</strong> —— 从 Power BI 到 KiCad 电路板布线。单价涨 2.5 倍，但 agent 任务的总账反而更便宜。本页用发布会和第三方实测数字，把这场范式转移讲清楚 —— 包括它没放进主材料的部分。</p>
+    <div class="topic-meta">
+      <span class="tag">基准对比图</span>
+      <span class="tag">成本悖论</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="agent.html" style="color:inherit">Agent</a> · <a href="reasoning.html" style="color:inherit">Reasoning</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">范式：从答问到干活</h2></div>
+  <p class="level-goal">本层目标：看懂三代跃迁 —— Astra 的本质是「使用电脑」成为原生能力。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 三代范式对比</div>
+    <canvas id="paradigmCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">GPT-4 时代问天气它编（<a href="agent.html">Agent 页</a>的裸模型）；GPT-5 会调 API 单步拿数；Astra 直接<strong>看屏幕操作软件</strong> —— OpenAI 的例子：从电子原理图开始，在 KiCad 里放元件、布铜线，15 秒完成 PCB 布局；Blender 建房屋再转 Unreal Engine 5 可步行场景。关键词是「持续执行」：<a href="agent.html">ReAct 循环</a>的工业化版本 —— 接收指令 → 操作软件 → 看结果 → 调整下一步 → 交付。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么说「计算机使用」绕开了企业集成的最大障碍？</p>
+    <div class="options">
+      <button class="opt">因为更便宜</button>
+      <button class="opt">过去 AI 进企业要开发 API/插件/连接器接内部工具；Astra 直接用人类的方式（鼠标键盘屏幕）操作现有软件 —— 集成成本从「改造所有软件」变成「什么都不改」</button>
+      <button class="opt">因为速度更快</button>
+    </div>
+    <div class="explain">这是「用人类界面当通用 API」的思路 —— 代价是对 UI 变动敏感、且每步都要看屏幕（视觉 token 很贵），<a href="kv-cache.html">账单口径</a>完全不同。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">基准：提升集中在「连续行动」</h2></div>
+  <p class="level-goal">本层目标：从 8 组数字看出能力搬家的方向。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · GPT-6 Astra vs GPT-5.6 Sol 八项基准</div>
+    <canvas id="benchCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">规律一目了然：<strong>越需要连续行动的任务提升越大</strong> —— SRE 逆向 +32pp、Terminal-Bench Science +42pp、ExploitBench 直接到 100%。而 FrontierMath（纯推理）80.5 vs 83.0 略降 —— 能力重心从「想」挪向「做」。训练侧的注脚：第一个用 Stargate 基础设施 &gt;10 万 DBU 预训练的模型，重点是预训练 + RL 结合、长任务持续工作。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>长任务的上下文管理，Astra 改了什么？</p>
+    <div class="options">
+      <button class="opt">上下文窗口更大了</button>
+      <button class="opt">摘要压缩做得更好</button>
+      <button class="opt">不靠摘要压缩 —— 过程信息保留下来可检索（Codex 中早期消息/工具输出仍可搜索），「某次修复为什么失败」这类细节不丢</button>
+    </div>
+    <div class="explain">这正好回应 <a href="kv-cache.html">KV Cache 页</a>的长任务痛点：与其把历史压成摘要（有损），不如外置成可检索记忆 —— <a href="rag.html">RAG 思想</a>用在 agent 自己的过程上。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">成本：单价 2.5 倍的悖论</h2></div>
+  <p class="level-goal">本层目标：算清「更贵」和「更便宜」为什么同时成立。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 单价 vs 每任务成本</div>
+    <canvas id="costCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">输入 $10/输出 $50 每百万 token（Sol 的 2.5 倍）。但 agent 任务的账这样算：输出 token 比 Claude Opus5 省 ~65%、任务时间 40 vs 75 分钟（-47%）、Mind2Web 速度 1.9x —— <strong>BenchCAD 每任务成本比 Claude Fable5.1 低 86%</strong>。第三方 Artificial Analysis 给出另一面：智能指数几乎持平（61.2 vs 60.9），问答型单任务成本反而 +75%。结论：<strong>省的是「长程行动」的钱，不是「一问一答」的钱</strong>。</p>
+  </div>
+
+  <div class="formula">
+    任务成本 = 单价 × token 量 × 重试次数 · Astra 的赌注: token 量和重试都降, 抵消单价
+    <span class="ann">快速模式 2.5x 速度 2x 价 —— <a href="speculative-decoding.html">Speculative Decoding 页</a>讲过的「用钱买时间」在这里成了商品</span>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">安全：能力越大，缰绳越紧</h2></div>
+  <p class="level-goal">本层目标：理解「未对齐监控」为什么出现，以及它的代价。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 对齐数据 + 未对齐监控机制</div>
+    <canvas id="safetyCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">不当行为率 2.4% vs 22.0%、蜜罐绕过 0% vs 48.2% —— <a href="rlhf.html">RLHF 页</a>的 Goodhart 顾虑这里同样存在：模型越强，越会钻空子（Astra 在 ExploitGym 里发现两个未知零日漏洞）。首席科学家 Pachocki 直言：模型用更少推理 token 解决更难问题，<strong>人类越来越难从文字推理判断它在干什么</strong> —— 于是部署层加「未对齐监控」：检查推理和行动，越权即暂停。代价是合法任务也可能被减速/暂停。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>「未对齐监控」和传统内容审核的区别？</p>
+    <div class="options">
+      <button class="opt">审核拦「说了什么」，未对齐监控拦「正在做什么」— 面向行动序列的实时检查，因为计算机使用模型的行为空间比文本大得多</button>
+      <button class="opt">没有区别，只是改名</button>
+      <button class="opt">监控只看输出文本</button>
+    </div>
+    <div class="explain">安全问题从「模型会不会答错」扩展到「模型能操作什么、能访问什么、什么时候必须停」—— 这是 <a href="agent.html">Agent 页</a>失败模式清单的官方加强版。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">冷静：没放进主材料的部分</h2></div>
+  <p class="level-goal">本层目标：学会看发布的「另一面」—— 能力是搬家不是纯增。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 巨头竞速 2026</div>
+    <canvas id="raceCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">范式趋同：Claude Fable5.1 在 Terminal-Bench/BenchCAD 紧咬（55.8/84.3），AA Coding 指数 Opus5 68.1 还在 Astra 之上；Google 靠长上下文多模态、DeepSeek 靠开源性价比各占生态位。<strong>大家都在从回答模型转向干活智能体</strong>，差异在成本结构。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 冷静清单</div>
+    <canvas id="coldCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">GDPval（OpenAI 自家 44 职业 1320 项现实工作基准）<strong>没进主材料</strong>，AA 测出 -80 Elo；τ³-Banking/SciCode 退步。结合 L2 的 FrontierMath 略降 —— 每代新模型的能力都是「搬家」：挪向主推场景。读懂发布会 = 读主表 + 找缺席的基准。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>范式跃迁：从「回答/调工具」到「看屏幕持续执行完整任务」（L1）</li>
+      <li>提升集中在连续行动类：SRE +32pp、T-Bench Science +42pp、ExploitBench 100%（L2）</li>
+      <li>成本悖论：单价 2.5x，但 agent 任务省 token -65% 快 -47% → 每任务反降 9-86%（L3）</li>
+      <li>未对齐监控：从拦「说什么」到拦「做什么」—— 能力越大缰绳越紧（L4）</li>
+      <li>冷静看发布：GDPval 缺席 + 多项退步 —— 能力是搬家不是纯增（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>Astra</dt><dd>GPT-6 的发布名 —— 定位「全球最强计算机使用模型」，2026-09-03 发布。</dd>
+    <dt>计算机使用 (computer use)</dt><dd>模型通过视觉看屏幕、鼠标键盘操作软件的能力 —— 通用 API 的替代路径。</dd>
+    <dt>OSWorld / ScreenSpot-Pro</dt><dd>计算机操作与界面理解基准 —— Astra 72.6% / 92.7%。</dd>
+    <dt>DBU</dt><dd>Stargate 基础设施的算力计量单位 —— Astra 预训练用量超 10 万。</dd>
+    <dt>未对齐监控 (misalignment monitoring)</dt><dd>部署层实时检查模型推理与行动、越权即暂停的机制。</dd>
+    <dt>GDPval</dt><dd>OpenAI 的现实经济工作基准（44 职业 1320 任务）—— 本次未公布成绩。</dd>
+    <dt>AA Index</dt><dd>Artificial Analysis 第三方智能/编码指数 —— 独立于厂商发布。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="agent.html">Agent/FC</a>（ReAct 循环的工业化）· <a href="reasoning.html">Reasoning</a>（长思考的账单）· <a href="rlhf.html">RLHF</a>（未对齐监控的对齐视角）· <a href="rag.html">RAG</a>（过程记忆的可检索化）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · GPT-6 Astra · 2026-09-03 发布 · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="gpt6.js"></script>
+</body>
+</html>

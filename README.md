@@ -21,6 +21,7 @@
 - [RAG / Embedding](topics/rag.html) — LLM 应用 · 检索增强 · 向量空间拖拽 + 检索流水线（前置：Tokenizer）
 - [Agent / Function Calling](topics/agent.html) — LLM 应用 · 智能体 · ReAct 循环动画 + MCP 一座桥（前置：RAG）
 - [Pretraining / Scaling Laws](topics/pretraining.html) — LLM 训练 · 第一部曲 · 幂律曲线 + Chinchilla 审计（前置：Tokenizer）
+- [GPT-6 Astra](topics/gpt6.html) — 前沿模型 · 2026-09-03 发布 · 计算机使用范式 + 八项基准 + 成本悖论（前置：Agent）
 
 ## 页面结构（五层）
 
