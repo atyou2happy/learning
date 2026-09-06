@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quantization — 把浮点数钉到格点上</title>
+<meta name="description" content="LLM 量化：显存墙、量化网格与误差、INT8/INT4/FP8/FP4 全家福、GPTQ/AWQ 校准思想、交互显存计算器。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 显存墙</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 格点</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 全家福</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 校准</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 计算器</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Quantization</div>
+    <div class="topic-kicker">LLM 部署 · 压缩</div>
+    <h1 class="topic-title">Quantization：量化</h1>
+    <p class="topic-sub">FP16 的 13B 模型要 26GB，消费级显卡望而却步；INT4 只要 6.5GB —— 同一个模型塞进了一张 RTX 3060。量化的本质是场交易：用格点之间的舍入误差，换 2~4 倍的显存与带宽。拖动 bit 滑块，看格点变疏、误差变大，一眼懂 4bit 为什么伤质量。</p>
+    <div class="topic-meta">
+      <span class="tag">网格滑块</span>
+      <span class="tag">显存计算器</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="kv-cache.html" style="color:inherit">KV Cache</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">显存墙：部署的第一道生死线</h2></div>
+  <p class="level-goal">本层目标：看清「模型多大 ↔ 显存多少 ↔ 什么卡能跑」的换算关系。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 权重显存账（还没算 KV Cache）</div>
+    <canvas id="wallCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">换算极简：参数量 × 每参数字节数。FP16=2 字节 → 13B=26GB、70B=140GB、671B=1342GB（20 张 A100 才装下 —— 这就是 <a href="moe.html">MoE 页</a>说「量化是 MoE 部署刚需」的原因）。虚线是两张参考卡：24G 的 4090 连 13B fp16 都装不下。</p>
+  </div>
+
+  <div class="formula">
+    显存(权重) = 参数量 × bytes/param · FP16=2 · INT8/FP8=1 · INT4/FP4=0.5
+    <span class="ann">量化不改变参数个数，只改变每个参数用几个字节表示 —— 显存直接除以 2 或 4</span>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么量化同时降低显存「占用」和推理「速度成本」？</p>
+    <div class="options">
+      <button class="opt">只是压缩存储，速度不变</button>
+      <button class="opt">显存占用↓（字节数少）+ 带宽需求↓（搬运字节数少）—— decode 阶段是带宽瓶颈（每步要搬全部权重），字节数减半 ≈ 速度接近翻倍</button>
+      <button class="opt">量化让矩阵乘法更快</button>
+    </div>
+    <div class="explain">回忆 KV Cache 页的不对称：decode 每步都要把激活的权重从显存搬到计算单元。INT4 搬运量是 FP16 的 1/4 —— 这就是端侧量化模型不仅装得下还跑得快的双重原因。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">格点：一切量化误差的来源</h2></div>
+  <p class="level-goal">本层目标：拖动滑块建立手感 —— bit 数 = 格点数，误差 = 半格宽。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 量化网格：三个权重被钉到格点（拖 bit 数 4~16）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="bitSlider" min="4" max="16" step="1" value="8" style="flex:1">
+      <span id="bitLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:50px">8 bit</span>
+    </div>
+    <canvas id="gridCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">量化公式：q = round(w/scale)，scale = range/格点数。范围 [-4,4] 时：16bit 最大误差 ±0.002、8bit ±0.016、<strong>4bit ±0.286（146 倍）</strong>。三个示例权重中橙色的 3.7 在 4bit 下被钉到 3.43（Δ0.27）—— 每一个权重都带着这点误差进入推理，层层累积。</p>
+  </div>
+
+  <div class="formula">
+    scale = (max−min)/(2^b−1) · 量化值 = round(w/scale) · 反量化 = q×scale · |误差| ≤ scale/2
+    <span class="ann">对称量化 zero=0；非对称再加 zero-point 偏移。核心不变：格点决定精度，位宽决定格点数</span>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>INT4 只有 15 个格点覆盖 [-4,4]，为什么模型还能「基本正常」？</p>
+    <div class="options">
+      <button class="opt">LLM 权重分布集中、对扰动鲁棒 —— 单个权重 ±0.29 的误差在 130 亿个权重的统计平均下大部分抵消</button>
+      <button class="opt">因为重要的权重被跳过量化了</button>
+      <button class="opt">因为推理时误差会被重置</button>
+    </div>
+    <div class="explain">统计鲁棒性是 4bit 可行的根本原因，但它是「基本」而不是「完全」—— 困难任务（数学/代码）上精度损失先暴露，这也是 GPTQ/AWQ 存在的意义（L4）。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">全家福：五种格式怎么选</h2></div>
+  <p class="level-goal">本层目标：一张图记住五种位宽的显存/质量/适用场景。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 位宽全家福（小格子 = 每参数占的 bit）</div>
+    <canvas id="familyCanvas" style="width:100%;height:230px"></canvas>
+    <p class="viz-note">经验法则：<strong>INT8 几乎免费（损失≈0），INT4 需要校准技术护航</strong>（PPL 5.7→5.9，损失 &lt;5%）。FP8 是 Hopper+ 的训练/推理双料格式（DeepSeek-V3 原生 FP8 训练）；FP4 是 Blackwell 的原生赌注。选型顺序：显存够→FP16；差一点→INT8；必须塞→INT4+AWQ/GPTQ。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>INT8 和 FP8 都是 1 字节，本质区别是什么？</p>
+    <div class="options">
+      <button class="opt">没有区别，只是名字不同</button>
+      <button class="opt">INT8 更精确</button>
+      <button class="opt">INT8 是均匀格点（等距），FP8 带指数位（格点在 0 附近密、远处疏）—— 天然适配「大量小权重 + 少量大权重」的分布</button>
+    </div>
+    <div class="explain">FP8 (E4M3) 用 4 位指数 3 位尾数：小数值格点密集、大数值稀疏，正好贴合 LLM 权重和激活的尖峰分布 —— 所以新硬件直接为它造了计算电路。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">校准：GPTQ/AWQ 的聪明之处</h2></div>
+  <p class="level-goal">本层目标：理解离群值问题与「用真实数据找重要权重」的校准思想。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 离群值困境与校准解法</div>
+    <canvas id="calibCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">朴素 min-max 量化被离群值绑架：一个 -60 的 outlier 把 scale 拉大，让 99% 挤在中间的权重共享少数格点。GPTQ（逐层最小化输出误差的 Hessian 逼近）和 AWQ（观察到少数「重要通道」由激活分布决定，保护它们）都用 <strong>512~2048 条真实样本</strong>跑一遍前向，找出「哪些权重不能动」—— 这就是校准（calibration）。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>AWQ 论文的核心发现是什么？</p>
+    <div class="options">
+      <button class="opt">权重大的才重要</button>
+      <button class="opt">重要性看激活不看权重 —— 一条通道权重平平但激活很大，量化它就伤输出；按激活分布给每条通道配缩放即可，无需混合精度</button>
+      <button class="opt">所有通道同等重要</button>
+    </div>
+    <div class="explain">「激活识别重要通道」是 AWQ (Activation-aware Weight Quantization) 名字的由来 —— 反直觉但有效：重要性藏在数据流里，不在静态权重里。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：交互显存计算器</h2></div>
+  <p class="level-goal">本层目标：亲手选模型 × 选精度，看哪张卡能接住。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 显存计算器（切换下拉框实时重算）</div>
+    <div style="display:flex;gap:14px;margin:10px 0;flex-wrap:wrap">
+      <select id="qModel" style="background:var(--bg2,#161b22);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px">
+        <option>7B</option><option selected>13B</option><option>70B</option><option>405B</option><option>671B MoE</option>
+      </select>
+      <select id="qFmt" style="background:var(--bg2,#161b22);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px">
+        <option>FP16</option><option>INT8/FP8</option><option selected>INT4/FP4</option>
+      </select>
+    </div>
+    <canvas id="calcCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note">默认 13B + INT4 = 6.5GB：RTX 3060 装下了（剩 4.3G 给 KV）—— 这就是「消费级显卡跑大模型」的全部秘密。切到 671B + INT4 = 335.5GB：依然需要 4 张 H200 —— MoE 的显存墙还得靠<a href="pagedattention.html">分页</a>和量化一起扛。</p>
+  </div>
+
+  <table>
+    <tr><th>工具/参数</th><th>说明</th></tr>
+    <tr><td><code>llama.cpp / GGUF</code></td><td>端侧事实标准：Q4_K_M 等混合位宽命名，CPU/Metal/CUDA 全支持</td></tr>
+    <tr><td><code>vllm --quantization awq</code></td><td>服务端 INT4 加载（还有 gptq / fp8 / squeezed）</td></tr>
+    <tr><td>KV Cache 量化</td><td>权重之外的第二战场：13B@4k 的 KV 3.13GB → int8 1.56 → int4 0.78（<a href="kv-cache.html">KV Cache 页</a>的四旋钮之一）</td></tr>
+    <tr><td>QLoRA / NF4</td><td>4bit 底座 + fp16 微调适配器 —— 显存不够还能微调的解法</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>显存 = 参数量 × 字节数：FP16=2、INT8=1、INT4=0.5 —— 量化直接除法（L1）</li>
+      <li>量化是把连续值钉到格点：误差 ≤ scale/2；4bit 误差是 16bit 的 146 倍（L2）</li>
+      <li>选型顺序：够→FP16，差一点→INT8（免费），必须塞→INT4+校准（L3）</li>
+      <li>校准思想：用真实样本找重要通道 —— GPTQ 看输出误差，AWQ 看激活分布（L4）</li>
+      <li>量化省显存也省带宽：decode 是带宽瓶颈，字节数减半 ≈ 速度翻倍 —— 双重收益（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>scale / zero-point</dt><dd>量化映射的两个参数：格点间距与原点偏移。反量化 q×scale+zero 近似还原。</dd>
+    <dt>PTQ / QAT</dt><dd>训练后量化（GPTQ/AWQ，免重训）vs 量化感知训练（训练中模拟误差，效果最好但贵）。</dd>
+    <dt>离群值 (outlier)</dt><dd>少数极大的权重/激活值，会绑架 min-max 量化的 scale —— 校准技术的主要敌人。</dd>
+    <dt>GPTQ</dt><dd>逐层用二阶信息（Hessian）最小化「量化前后输出差」的后训练量化。</dd>
+    <dt>AWQ</dt><dd>按激活分布识别重要通道并加缩放保护 —— 不混合精度也接近无损。</dd>
+    <dt>GGUF</dt><dd>llama.cpp 的模型容器格式，内含多种位宽的预量化权重（Q4_K_M 等）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="kv-cache.html">KV Cache</a>（另一边的显存账）· <a href="moe.html">MoE</a>（1.3TB 显存墙的制造者）· <a href="flash-attention.html">FlashAttention</a>（不省显存省读写）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Quantization · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="quantization.js"></script>
+</body>
+</html>

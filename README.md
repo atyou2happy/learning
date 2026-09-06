@@ -14,6 +14,7 @@
 - [Speculative Decoding](topics/speculative-decoding.html) — LLM 推理加速 · 投机解码 · 验证游戏（前置：KV Cache）
 - [采样策略](topics/sampling.html) — LLM 推理 · Temperature/Top-k/Top-p · 温度滑块（前置：Speculative Decoding）
 - [MoE](topics/moe.html) — 模型架构 · 混合专家 · Router 动画 + 参数账本（671B/37B/5.5%）
+- [Quantization](topics/quantization.html) — LLM 部署 · 量化 · 网格滑块 + 显存计算器（前置：KV Cache）
 
 ## 页面结构（五层）
 
