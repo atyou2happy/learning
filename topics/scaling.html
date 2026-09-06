@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scaling Laws — 为什么模型是这个尺寸</title>
+<meta name="description" content="Scaling Laws 缩放定律：幂律的残酷汇率、Kaplan vs Chinchilla 大反转、20 tok/param 法则、算力预算计算器、Llama3 过量训练的精明、数据墙与四条出路。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 幂律</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 反转</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 计算器</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 后传</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 数据墙</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Scaling Laws</div>
+    <div class="topic-kicker">训练理论 · 规模的物理学</div>
+    <h1 class="topic-title">Scaling Laws 缩放定律</h1>
+    <p class="topic-sub">全站 24 页每页都在展示「某个尺寸的模型」—— 为什么是 70B？为什么 15T token？答案在一条幂律曲线上。更精彩的是剧情：<strong>Kaplan 2020 说「参数优先」，Chinchilla 2022 反转「数据同举」（70B 赢 280B），Llama3 又故意违反（1875 tok/param）</strong>—— 因为训练最优 ≠ 端到端最优。一条曲线，三幕反转剧。</p>
+    <div class="topic-meta">
+      <span class="tag">算力预算滑块</span>
+      <span class="tag">tok/param 光谱</span>
+      <span class="tag">约 9 分钟</span>
+      <span class="tag">前置：<a href="pretraining.html" style="color:inherit">Pretraining</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">幂律：机器学习最无聊又最神奇的图</h2></div>
+  <p class="level-goal">本层目标：认识 loss-算力 幂律，记住残酷汇率。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 残酷汇率</div>
+    <canvas id="powerCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">loss = 2.57·C^(−0.05)：算力涨 10 倍，loss 相对只降 11%；1000 倍算力换 29% —— <strong>贵得离谱但准得吓人</strong>。这条直线跨越 7 个数量级依然成立（GPT-4 的训练成功部分正因提前在小模型上拟合了这条线）。"无聊"在于它是条直线；"神奇"在于 —— 模型还没训，命运已写好。</p>
+  </div>
+
+  <div class="formula">
+    C ≈ 6 · N · D （训练总算力 = 6 × 参数 × token 数）
+    <span class="ann">每个参数在每个 token 上做 ~2 次前向乘加 + 4 次反向 —— 这个 6 是全站算力账的万能钥匙（LoRA 页、AirLLM 页都引用过）</span>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">反转：Kaplan vs Chinchilla</h2></div>
+  <p class="level-goal">本层目标：理解固定预算下的最优分配之争。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 同样 ~5e23 FLOPs 的两种花法</div>
+    <canvas id="vsCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">Kaplan 2020（GPT-3/Gopher 背后）：拟合出 N_opt ∝ C^0.73 —— <strong>参数优先</strong>，于是 Gopher 用 280B 参数只喂 300B token（1.1 tok/param）。Chinchilla 2022 用更细的实验网格反转：N 和 D 应该<strong>等比增长</strong>（各 ∝ C^0.5），比值恒定 ~20 tok/param —— 同样算力下 70B 的 Chinchilla 全面碾压 280B 的 Gopher。教训：大模型的"大"，曾经放错了地方。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>Chinchilla 反转 Kaplan 的关键方法差异是什么？</p>
+    <div class="options">
+      <button class="opt">用了更大的模型</button>
+      <button class="opt">Kaplan 的学习率调度与最终 loss 没对齐（短训推长训有偏），Chinchilla 用每点都重调超参的实验网格修正了这个偏差</button>
+      <button class="opt">用了更多数据</button>
+    </div>
+    <div class="explain">缩放定律是对实验的拟合 —— 学习率调度这种"细节"足以让指数从 0.73 变成 0.5，进而让整个行业从"堆参数"转向"堆数据"。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">计算器：你的预算怎么花</h2></div>
+  <p class="level-goal">本层目标：拖预算滑块，感受最优点的滑动。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 算力预算计算器（拖滑块！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="budgetSlider" min="20" max="25" step="0.5" value="22" style="flex:1">
+      <span id="budgetLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:110px">1e22 FLOPs</span>
+    </div>
+    <canvas id="calcCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">等高线图：同色环 = 同 loss，谷底连线 = 最优配比。拖预算看红点沿谷底滑动 —— 预算涨 100 倍，最优 N 和 D 各涨 10 倍（C^0.5），比值恒为 20。右下角实时换算 H100-天数 —— 直观感受"1e24 FLOPs ≈ 两万张 H100 跑一个月"的行业新闻。</p>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">后传：Llama3 故意「违反」Chinchilla</h2></div>
+  <p class="level-goal">本层目标：理解训练最优与端到端最优的分野。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · tok/param 光谱（log 轴）</div>
+    <canvas id="specCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">GPT-3/Gopher 挤在 1-2（Kaplan 时代）→ Chinchilla 20 → Llama3-8B 冲到 <strong>1875</strong>。为什么"违反"定律反而对？—— 因为 Chinchilla 只优化<strong>训练这一次</strong>的成本，而真实世界要为<strong>服务的每一天</strong>付费。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 训练一次 vs 服务十亿次</div>
+    <canvas id="serveCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">同量级算力两种花法：Chinchilla-70B 训练完更强，但每次前向要搬 140GB 权重（<a href="roofline.html">Roofline 页</a>：decode 的带宽墙）；Llama3-8B 牺牲一点 loss，服务便宜 ~9 倍。<strong>高频服务的小模型，过量训练是精明不是浪费</strong> —— 律师没错，是合同变了。之后的续集：test-time compute（<a href="reasoning.html">Reasoning 页</a>）—— 训练算力 + 推理算力一起进目标函数。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">数据墙：曲线的尽头</h2></div>
+  <p class="level-goal">本层目标：看到缩放的物理极限与四条出路。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 互联网不够用了</div>
+    <canvas id="wallCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">Common Crawl 去重后高质量文本 ~10-30T token，Llama3 已用 15T —— 而"10T 模型 × 20 tok/param"需要 200T，是整个互联网的十倍。四条出路各是一页故事：合成数据（模型造数据喂模型）、多轮课程、<a href="mostik.html">Mostik</a> 式侧路（冻结大模型只训小的）、test-time compute。<strong>缩放定律没有失效，但它的燃料正在见底</strong> —— 2026 的战场从"更大的模型"转向"更聪明的分配"。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>loss ∝ C^(−0.05)：10 倍算力换 11% 相对降幅 —— 残酷但可预测（L1）</li>
+      <li>C = 6ND 是万能算力钥匙；Chinchilla：N、D 各 ∝ C^0.5，20 tok/param（L2）</li>
+      <li>Kaplan→Chinchilla 的反转源于实验方法的修正 —— 定律是对实验的拟合（L2）</li>
+      <li>训练最优 ≠ 端到端最优：Llama3 1875 tok/param 是服务成本进场后的精明（L4）</li>
+      <li>数据墙 ~30T：出路 = 合成/侧路/test-time compute —— 从堆规模到聪明分配（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>scaling law</dt><dd>缩放定律 —— loss 与 N/D/C 之间的幂律关系，可外推预测大模型表现。</dd>
+    <dt>Chinchilla-optimal</dt><dd>固定训练预算下的最优配比 —— 约 20 token/参数（训练最优口径）。</dd>
+    <dt>over-training (过量训练)</dt><dd>超出 Chinchilla 配比喂更多 token —— 为推理成本服务的策略（Llama3 路线）。</dd>
+    <dt>compute-optimal vs inference-optimal</dt><dd>训练一次最优 vs 训练+服务全生命周期最优 —— 合同变了。</dd>
+    <dt>iso-loss curve</dt><dd>等 loss 等高线 —— (N, D) 平面上同 loss 的点连成环，谷底即最优线。</dd>
+    <dt>data wall</dt><dd>数据墙 —— 高质量公开文本的物理上限（~10-30T token 量级）。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="pretraining.html">Pretraining</a>（这页是它的"为什么"前传）· <a href="reasoning.html">Reasoning</a>（test-time compute 续集）· <a href="roofline.html">Roofline</a>（服务成本的物理学）· <a href="mostik.html">Mostik</a>（数据墙的侧路）· <a href="lora.html">LoRA</a>（冻结思想同源）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Scaling Laws · 图解版 · Kaplan/Chinchilla/Llama3 三幕剧</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="scaling.js"></script>
+</body>
+</html>

@@ -29,6 +29,7 @@
 - [AirLLM](topics/airllm.html) — LLM 部署 · 逐层流式加载 · 4GB 跑 70B（前置：Quantization）
 - [Mamba / SSM](topics/mamba.html) — 模型架构 · 状态空间模型 · 恒定状态 8000 倍差距 + hybrid 现状（前置：KV Cache）
 - [Roofline](topics/roofline.html) — 系统底层 · 性能物理学 · 全站技巧一条曲线收拢（前置：FlashAttention）
+- [Scaling Laws](topics/scaling.html) — 训练理论 · 缩放定律 · Kaplan→Chinchilla→Llama3 三幕剧 + 算力计算器（前置：Pretraining）
 
 ## 页面结构（五层）
 
