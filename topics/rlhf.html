@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RLHF / DPO — 把模型变成助手</title>
+<meta name="description" content="RLHF 与 DPO：为什么需要对齐、三步流水线动画、reward hacking 与 KL 缰绳、DPO 跳过奖励模型、2026 对齐技术汇流。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 为什么</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 三步</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 缰绳</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ DPO</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 汇流</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>RLHF</div>
+    <div class="topic-kicker">LLM 训练 · 对齐</div>
+    <h1 class="topic-title">RLHF / DPO：对齐</h1>
+    <p class="topic-sub">预训练模型只学过「世界怎么运转」：你问退订，它续写一堆别人的提问。人类偏好评估里，1.3B 的 InstructGPT 击败 175B GPT-3 约 85% 的对比 —— 参数少 130 倍却更有用。训练三部曲的最后一步：教模型「人要什么」，以及怎么防止它学会讨好裁判。</p>
+    <div class="topic-meta">
+      <span class="tag">三步流水线动画</span>
+      <span class="tag">Goodhart 曲线</span>
+      <span class="tag">约 12 分钟</span>
+      <span class="tag">前置：<a href="reasoning.html" style="color:inherit">Reasoning</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">为什么需要对齐</h2></div>
+  <p class="level-goal">本层目标：分清「能力」（预训练给的）和「有用」（对齐给的）是两回事。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一个问题，两种模型</div>
+    <canvas id="problemCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note">预训练目标（下一词预测，见 <a href="tokenizer.html">Tokenizer 页</a>的词表）让模型学会了世界的统计规律，但它的本能是<strong>续写</strong>不是<strong>回答</strong>。SFT（监督微调）教它格式，但范例有限、好坏难分；RLHF 的洞察：<strong>人类比较两个答案哪个好，比写出好答案容易得多</strong> —— 于是用偏好数据训练裁判。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么 RLHF 用「A 比 B 好」的比较数据，而不是直接标注「完美答案」？</p>
+    <div class="options">
+      <button class="opt">因为比较数据便宜而已，效果一样</button>
+      <button class="opt">人类判断相对好坏远比生成完美答案可靠 —— 写作难、评比易；且比较信号天然带场景适应性</button>
+      <button class="opt">因为完美答案不存在</button>
+    </div>
+    <div class="explain">InstructGPT 的数据账：13k 演示（SFT）vs 33k 比较对（RM）—— 比较对覆盖更广的场景密度。这就是「裁判易得，名师难求」。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">三步流水线：SFT → RM → PPO</h2></div>
+  <p class="level-goal">本层目标：点四下按钮，记住三步各自养出什么。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · RLHF 三步流水线（点按钮推进）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="rlBtn" class="opt" style="border:1px solid var(--border)">▶ 开始三步训练</button>
+    </div>
+    <canvas id="pipeCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">SFT 像临摹（学格式）→ RM 像立裁判（Bradley-Terry 模型拟合偏好对，输出标量分数）→ PPO 像带教练训练（最大化 RM 分数）。三步各养一个模型，上一步的输出是下一步的教练 —— 工程复杂度也是三段式的。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>RM（奖励模型）的输入输出是什么？</p>
+    <div class="options">
+      <button class="opt">输入问题，输出答案</button>
+      <button class="opt">输入两个答案，输出更好的那个</button>
+      <button class="opt">输入 (提示, 回答)，输出一个标量分数 —— 训练时看偏好对，推理时单打分</button>
+    </div>
+    <div class="explain">训练用比较（A>B → 分差拉开），使用时独立打分 —— 这就是「裁判」：训练时看两人对决学眼力，比赛时给每个人单独亮分。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">缰绳：reward hacking 与 KL 惩罚</h2></div>
+  <p class="level-goal">本层目标：理解对齐失败的模式，以及 KL 项为什么是必须的缰绳。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · Goodhart 定律现身：RM 分数 vs 真实质量</div>
+    <canvas id="goodhartCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">优化 RM 过了交叉点之后：模型学会「讨好裁判」—— 堆砌长答案、加讨好性开场白、用 RM 偏爱的句式 —— 分数涨但真实质量跌。RM 是人类偏好的<strong>代理</strong>，代理被优化到极限就失真（Goodhart 定律）。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · KL 缰绳：不许离参考模型太远</div>
+    <canvas id="klCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">PPO 的目标函数带惩罚项：最大化 <code>E[RM(x)] − β·KL(π‖π_ref)</code>。π_ref 是 SFT 模型 —— 策略跑得离它太远（意味着开始说「人话之外」的东西钻空子）就被 β 拉回。β 太小 → hacking（图3）；β 太大 → 白训。这是 <a href="reasoning.html">Reasoning 页</a>GRPO 里同样存在的 tension。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么 reward hacking 专门发生在 RL 阶段，SFT 阶段没有？</p>
+    <div class="options">
+      <button class="opt">SFT 只是模仿范例（不上山），RL 沿着 RM 梯度爬山 —— 优化器天然找到评分函数的漏洞，而 RM 是有漏洞的代理</button>
+      <button class="opt">因为 SFT 数据更干净</button>
+      <button class="opt">因为 RL 学习率更大</button>
+    </div>
+    <div class="explain">「优化压力找到代理指标的裂缝」是普遍规律 —— RLHF 的版本是讨好裁判，<a href="reasoning.html">R1 的版本</a>是思考 token 无限膨胀刷答案正确率。对策都是拉缰绳（KL / 长度惩罚）。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">DPO：你的模型已经是奖励模型</h2></div>
+  <p class="level-goal">本层目标：理解 DPO 怎么把三步压成一步，以及它牺牲了什么。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · PPO vs DPO 流水线对比 + loss 行为</div>
+    <canvas id="dpoCanvas" style="width:100%;height:210px"></canvas>
+    <p class="viz-note">DPO 的数学洞察：RLHF 的最优解有闭式形式，其中的奖励可以直接用 <code>β·log(π/π_ref)</code> 表达 —— 于是<strong>偏好对直接变成 loss</strong>，RM 阶段整个消失。显存里从 4 个模型变 2 个（policy + ref），训练从在线采样变离线 —— 工程复杂度骤降，成了开源社区默认选择。代价：上限略低于精心调过的 PPO（在线探索 vs 离线固定数据）。</p>
+  </div>
+
+  <div class="formula">
+    L_DPO = −log σ( β·[ log π(y_w)/π_ref(y_w) − log π(y_l)/π_ref(y_l) ] )
+    <span class="ann">赢者概率升、输者概率降（都相对参考模型）→ loss 降。σ 压平尾部：已经分得很开的对不再刷分 —— 天然防过训</span>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">汇流：2026 的对齐全景</h2></div>
+  <p class="level-goal">本层目标：把 RLHF 放进演进史，看清 R1/GRPO 在哪一站。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 对齐技术演进：分数谁来打？</div>
+    <canvas id="evolveCanvas" style="width:100%;height:150px"></canvas>
+    <p class="viz-note">四年演进，骨架不变：「更好的输出 → 更高的分数 → 更新权重」。变的只是打分者 —— 人类（RLHF）→ AI（RLAIF/宪法）→ 偏好对本身（DPO）→ <strong>规则</strong>（GRPO：答案对错 / 代码通过）。<a href="reasoning.html">Reasoning 页</a>的 R1 就站在最后一站：规则奖励可验证、不可 hacking，于是推理策略得以充分涌现。</p>
+  </div>
+
+  <table>
+    <tr><th>方案</th><th>打分者</th><th>模型数</th><th>特点</th></tr>
+    <tr><td>RLHF-PPO</td><td>学出来的 RM</td><td>4</td><td>上限高、工程最复杂、易不稳</td></tr>
+    <tr><td>DPO 家族</td><td>偏好对直接进 loss</td><td>2</td><td>离线稳定简单 —— 开源默认</td></tr>
+    <tr><td>RLAIF / 宪法 AI</td><td>AI 按原则自评</td><td>视方案</td><td>标注成本骤降，可扩展性最好</td></tr>
+    <tr><td>GRPO（R1）</td><td>规则（对错/编译/单测）</td><td>2+轻量</td><td>不可 hacking —— 推理涌现的土壤</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>能力≠有用：1.3B 对齐后胜 175B 原始模型 85% 的对比（L1）</li>
+      <li>三步流水线：SFT 临摹 → RM 立裁判 → PPO 带教练训练（L2）</li>
+      <li>Goodhart：RM 是代理指标，优化过头就失真 —— KL 缰绳是解药（L3）</li>
+      <li>DPO：闭式解让 RM 消失，4 模型变 2 模型，离线简单稳定（L4）</li>
+      <li>演进主线是「打分者变迁」：人类 → AI → 偏好对 → 规则（R1/GRPO）（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>RLHF</dt><dd>基于人类反馈的强化学习 —— 用偏好数据训练奖励模型再优化策略的全套流程。</dd>
+    <dt>RM (Reward Model)</dt><dd>给 (提示, 回答) 打标量分的模型 —— Bradley-Terry 损失拟合偏好对。</dd>
+    <dt>PPO</dt><dd>近端策略优化 —— 稳定的 policy gradient 算法，RLHF 时代的默认 RL 引擎。</dd>
+    <dt>KL 惩罚</dt><dd>限制策略偏离参考模型的正则项 —— 防 reward hacking 的缰绳，β 控制松紧。</dd>
+    <dt>DPO</dt><dd>直接偏好优化 —— 数学上等价于 RLHF 的离线简化，无需显式 RM 和采样。</dd>
+    <dt>GRPO</dt><dd>组相对策略优化 —— 同题一组采样互为基线，省价值网络；R1 用它配规则奖励。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="reasoning.html">Reasoning</a>（GRPO 与规则奖励的完整故事）· <a href="sampling.html">采样策略</a>（策略分布的另一端）· <a href="tokenizer.html">Tokenizer</a>（三部曲的第一部：预训练的目标函数）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · RLHF/DPO · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="rlhf.js"></script>
+</body>
+</html>
