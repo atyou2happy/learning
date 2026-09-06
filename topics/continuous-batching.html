@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Continuous Batching — GPU 上永不满员的批</title>
+<meta name="description" content="Continuous Batching：迭代级调度，请求随到随进、完成即走。木桶效应甘特图动画、利用率曲线与 vLLM 实测。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 空转的 GPU</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 木桶效应</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 连续批</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 与分页配合</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 落地</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Continuous Batching</div>
+    <div class="topic-kicker">LLM 推理服务 · 调度</div>
+    <h1 class="topic-title">Continuous Batching</h1>
+    <p class="topic-sub">静态批处理的真相是 GPU 大部分时间在给最长的请求陪跑。连续批处理把调度的粒度从「一整批」打碎到「每一步 forward」：完成的请求立即出列，等着的请求立即补位 —— GPU 槽位永不满员也永不空转。</p>
+    <div class="topic-meta">
+      <span class="tag">甘特图动画</span>
+      <span class="tag">图解 + 数据</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="pagedattention.html" style="color:inherit">PagedAttention</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">空转的 GPU：一个 batch 六个请求，四个在陪跑</h2></div>
+  <p class="level-goal">本层目标：看清「服务端利用率」为什么天然偏低 —— 问题不在硬件在调度。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 静态批处理甘特图：R1 干完了，必须等 R6</div>
+    <canvas id="ganttStaticCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">R1 生成 30 个 token 就完成了，但 batch 要等最长的 R6（340 token）跑完才能整体返回、整体换血。红色区域 = 占着槽位空等。本场景利用率 <strong>40.4%</strong> —— 超过一半的算力在陪跑。</p>
+  </div>
+
+  <div class="formula">
+    槽位利用率 U = Σ Lᵢ / (B × L_max) = 825 / (6 × 340) ≈ <b>40.4%</b>
+    <span class="ann">输出长度越不齐（真实流量就是这样），U 越低 —— 长尾请求决定一切。这是请求级调度的死结</span>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>静态批处理利用率低的根本原因是？</p>
+    <div class="options">
+      <button class="opt">GPU 显存太小装不下长序列</button>
+      <button class="opt">batch 的生命周期被最长的请求绑架，短请求完成后槽位空等，无法提前返回也无法回填</button>
+      <button class="opt">模型权重加载太慢</button>
+    </div>
+    <div class="explain">木桶效应：整个 batch 是一只木桶，最长的请求是那块最短的板。请求级调度下，槽位生命周期 = 整批生命周期。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">代价量化：延迟 2.5x、吞吐损失过半</h2></div>
+  <p class="level-goal">本层目标：用同一场景算出静态批处理浪费掉的延迟和吞吐。</p>
+
+  <div class="grid cols-3">
+    <div class="card">
+      <div class="num-big">340</div>
+      <p>静态批下每个请求的等待上限 —— 全体等到 t=340 才能返回，无论自己多短</p>
+    </div>
+    <div class="card">
+      <div class="num-big">137.5</div>
+      <p>连续批下平均完成时刻（825/6）—— 短请求先走，改善 2.47x</p>
+    </div>
+    <div class="card">
+      <div class="num-big">14.8 vs 6</div>
+      <p>同样 340 个迭代、6 个槽位：回填后能完成 14.8 个请求 —— 吞吐 2.47x</p>
+    </div>
+  </div>
+
+  <div class="formula">
+    回填吞吐 = 槽位总量 / 平均长度 = (6 × 340) / 137.5 = <b>14.8 个请求</b> / 批周期
+    <span class="ann">静态批同期只能完成 6 个 —— 不是 GPU 变快了，是「座位」不再被完成的请求占着</span>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>为什么回填后同样 2040 个「槽位·迭代」能完成 14.8 个请求而不是 6 个？</p>
+    <div class="options">
+      <button class="opt">因为连续批处理用了更快的 GPU 内核</button>
+      <button class="opt">因为批大小从 6 扩大到了 14.8</button>
+      <button class="opt">槽位总量不变，但每个槽位不再有「完成后空等」的死时间 —— 空出的位置立刻被队列中的新请求吃掉</button>
+    </div>
+    <div class="explain">吞吐的本质是槽位周转率。静态批的槽位每周转一次浪费 59.6% 的时间；连续批把这部分全部转化为有效工作。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">连续批处理：每个 decode 步都是一次重新排座</h2></div>
+  <p class="level-goal">本层目标：动画看懂「迭代级调度」，理解 continuous 的真正含义。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 核心模拟器：9 个请求、6 个槽位，播放看回填（▶ 播放 / 单步）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="cbPlay" class="opt" style="border:1px solid var(--border)">▶ 播放</button>
+      <button id="cbStep" class="opt" style="border:1px solid var(--border)">单步 +17</button>
+      <button id="cbReset" class="opt" style="border:1px solid var(--border)">↺ 重置</button>
+    </div>
+    <canvas id="ganttContCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note">每个色块 = 一个请求从进槽到完成的完整生命周期。看 R 完成的瞬间队列头的新请求补进同一条泳道 —— 没有任何槽位空转。播放结束前 9 个请求全部完成，槽位自始至终 6/6 满载。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 调度粒度：请求级 vs 迭代级</div>
+    <canvas id="schedCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">Orca（OSDI 2022）首次提出 iteration-level scheduling：调度器每一步 forward 都运行一次 —— 批的组成是流动的，不是固定的。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>「continuous（连续）」修饰的到底是什么？</p>
+    <div class="options">
+      <button class="opt">批的组成在连续变化：每一步 decode 后都可能有人离开、有人加入 —— 批永不解散</button>
+      <button class="opt">请求的 token 是连续生成的</button>
+      <button class="opt">GPU 显存是连续分配的</button>
+    </div>
+    <div class="explain">传统批有「组建→运行→解散→再组建」的循环，解散期 GPU 空转；连续批永不解散 —— 它只是一只在变形的批。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">与 PagedAttention 的配合：一个管时间，一个管空间</h2></div>
+  <p class="level-goal">本层目标：理解为什么迭代级调度必须配分页显存 —— vLLM 的两大件为什么成对出现。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 没有分页时，回填会重新制造碎片</div>
+    <canvas id="pagedCanvas" style="width:100%;height:170px"></canvas>
+    <p class="viz-note">迭代级调度意味着请求随时进出 —— KV Cache 也必须随时插入/拔出。连续分配下，频繁进出很快把显存切成碎片，新请求要 4 格连续空间只能干等（左侧红格）；分页后任何空闲块都能用（右侧绿格），插入拔出零碎片代价。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 利用率曲线：木桶震荡 vs 稳态饱和</div>
+    <canvas id="utilCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">静态批的利用率随 batch 组成在低位震荡（每批取决于该批的长尾）；连续批在队列不空时稳定在 ~95% 的饱和态 —— 两者差距约 2.3x，与 vLLM 论文的吞吐实测同量级。</p>
+  </div>
+
+  <blockquote class="intuition">
+    <p><strong>分工口诀</strong>：连续批处理决定「谁在什么时候占哪个座位」（时间维），PagedAttention 决定「坐下后东西放哪」（空间维）。vLLM 的吞吐奇迹 = 迭代级调度 × 分页显存，缺一不可。</p>
+  </blockquote>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>为什么说迭代级调度「倒逼」出了分页显存的需求？</p>
+    <div class="options">
+      <button class="opt">因为分页能让模型输出更长的序列</button>
+      <button class="opt">请求随时进出使显存分配变成高频动态操作，连续分配必然碎片化，只有块级分配能撑住这种节奏</button>
+      <button class="opt">因为分页可以压缩 KV Cache 的大小</button>
+    </div>
+    <div class="explain">调度越自由，显存管理越要跟得上。时间维的解放必须配空间维的解放 —— 这就是 vLLM 论文把两者写在一起的原因。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：参数、现象与边界</h2></div>
+  <p class="level-goal">本层目标：知道生产环境怎么调、哪些现象说明它在工作、什么时候它帮不了你。</p>
+
+  <table>
+    <tr><th>vLLM 参数</th><th>作用</th><th>调大/调小的权衡</th></tr>
+    <tr><td><code>max-num-seqs</code></td><td>最大并发（槽位数 B）</td><td>大→吞吐高但每请求变慢；小→延迟低</td></tr>
+    <tr><td><code>max-num-batched-tokens</code></td><td>每步 forward 的 token 预算（prefill 与 decode 共享）</td><td>大→prefill 吞吐高，但 decode 步延迟抖动</td></tr>
+    <tr><td><code>enable-chunked-prefill</code></td><td>长 prompt 切片进 batch，避免 decode 全体暂停</td><td>开→尾延迟平稳；关→吞吐略高</td></tr>
+  </table>
+
+  <h3><span class="sec-idx">5.1</span>边界：连续批处理不是万能的</h3>
+  <table>
+    <tr><th>场景</th><th>为什么帮助有限</th></tr>
+    <tr><td>单请求离线批处理</td><td>没有并发，谈不上调度 —— 瓶颈在单序列 decode 速度</td></tr>
+    <tr><td>输出长度几乎相同</td><td>木桶效应天然不存在，静态批已接近最优</td></tr>
+    <tr><td>GPU 已经被 KV Cache 撑满</td><td>槽位无法回填 —— 需要先解决显存（回到 PagedAttention / 量化 / GQA）</td></tr>
+  </table>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>静态批的利用率由最长请求决定：U = ΣLᵢ/(B·L_max)，真实流量下常低于 50%（L1）</li>
+      <li>同一批槽位，回填把吞吐提升 2.47x、平均完成时刻提前 2.47x —— 全部来自消灭空等（L2）</li>
+      <li>continuous 的含义：批永不解散，每一步 decode 后都重排座位 —— 迭代级调度（L3）</li>
+      <li>调度（时间）与分页（空间）互为生死搭档：迭代级调度倒逼块级显存分配（L4）</li>
+      <li>参数三件套 max-num-seqs / batched-tokens / chunked-prefill 就是「座位数、步预算、切片」；单请求或等长场景它帮不上忙（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>静态批处理 (static batching)</dt><dd>攒一批跑完再换：槽位生命周期 = 整批生命周期，木桶效应的来源。</dd>
+    <dt>迭代级调度 (iteration-level scheduling)</dt><dd>每个 forward 步重排 batch 组成（Orca 提出），连续批处理的核心机制。</dd>
+    <dt>槽位 (slot)</dt><dd>batch 中的一个位置 = 一个正在 decode 的请求。本页所有利用率都是槽位时间维的账。</dd>
+    <dt>chunked prefill</dt><dd>把长 prompt 切成片穿插进 decode 步，避免一个长 prefill 冻住全体生成。</dd>
+    <dt>木桶效应</dt><dd>批的产出被最短木板（最长请求）限制 —— 本页用甘特图红区可视化。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">系列至此闭环：<a href="kv-cache.html">KV Cache</a>（账本）→ <a href="pagedattention.html">PagedAttention</a>（空间）→ 本页（时间）。三者合起来就是 vLLM 吞吐奇迹的完整拼图。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Continuous Batching · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="continuous-batching.js"></script>
+</body>
+</html>

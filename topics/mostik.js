@@ -134,7 +134,7 @@
       ctx.font = FONT; ctx.fillStyle = C.text;
       ctx.fillText('翻译隐态', (bx0 + bx1) / 2 - 26, byMid + 10);
       ctx.fillStyle = C.dim;
-      ctx.fillText('(唯一被训练的部件)', (bx0 + bx1) /  - 44, byMid + 26);
+      ctx.fillText('(唯一被训练的部件)', (bx0 + bx1) / 2 - 44, byMid + 26);
       /* flows */
       arrow(ctx, gx + gw / 2 - 30, gy - 8, gx + gw / 2 - 30, gy - 2, C.dim);
       ctx.fillStyle = C.dim; ctx.font = FONT;
