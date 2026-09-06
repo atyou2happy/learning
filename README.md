@@ -24,6 +24,7 @@
 - [GPT-6 Astra](topics/gpt6.html) — 前沿模型 · 2026-09-03 发布 · 计算机使用范式 + 八项基准 + 成本悖论（前置：Agent）
 - [ViT / CLIP](topics/vit-clip.html) — 多模态 · 视觉基础 · patch 滑块 + CLIP 矩阵 + 视觉 token 账单（前置：Tokenizer）
 - [Diffusion](topics/diffusion.html) — 生成模型 · 扩散 · 加噪滑块 + CFG 引导 + 两范式对照（前置：ViT/CLIP）
+- [LoRA / PEFT](topics/lora.html) — LLM 微调 · 低秩适配 · rank 滑块 + QLoRA 1.1TB→48GB（前置：Quantization）
 
 ## 页面结构（五层）
 

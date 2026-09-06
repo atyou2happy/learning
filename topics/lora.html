@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoRA / PEFT — 用 0.1% 的参数微调大模型</title>
+<meta name="description" content="LoRA 与参数高效微调：训练显存账（16B/参数）、低秩分解 rank 滑块、QLoRA 三连击 1.1TB→48GB、冻结思想家族、LoRA vs 全参 vs RAG 决策表。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 账单</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 低秩</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ QLoRA</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 家族</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 决策</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>LoRA</div>
+    <div class="topic-kicker">LLM 微调 · PEFT</div>
+    <h1 class="topic-title">LoRA / PEFT</h1>
+    <p class="topic-sub">全参微调 70B 要 1.1TB 显存（14 张 A100），LoRA 只训 <strong>0.1% 的参数</strong>，QLoRA 组合拳把它压到一张 48G 卡 —— 23 倍的差距。核心洞察一句话：<strong>微调的本质是「小改动」，小改动天然低秩</strong> —— 冻结的基座负责知识，一对小矩阵 B·A 负责你的领域。拖动 rank 滑块，看 0.8% 的参数怎么装下一个新任务。</p>
+    <div class="topic-meta">
+      <span class="tag">rank 滑块</span>
+      <span class="tag">1.1TB→48GB</span>
+      <span class="tag">约 10 分钟</span>
+      <span class="tag">前置：<a href="quantization.html" style="color:inherit">Quantization</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">账单：训练 ≠ 推理</h2></div>
+  <p class="level-goal">本层目标：算清全参微调的真实门槛 —— 每参数 16 字节从哪来。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 训练时每个参数要养 4 份</div>
+    <canvas id="billCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">推理只要权重（<a href="quantization.html">量化页</a>：70B fp16 = 140GB）；训练是另一笔账：权重 2B + 梯度 2B + fp32 母版 4B + Adam 动量 8B = <strong>16 字节/参数</strong> —— 70B 就是 1.1TB。梯度对全参数都要算、Adam 要给全参数存两份历史 —— 这两笔大账，只有「不动大部分参数」才能省掉。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>训练显存里最大的一笔是什么？为什么 LoRA 能省掉它？</p>
+    <div class="options">
+      <button class="opt">权重，LoRA 把权重压小了</button>
+      <button class="opt">Adam 状态（8B/参数，m+v 两份历史）+ 梯度（2B）— 冻结的参数不需要梯度更不需要优化器状态，LoRA 让 99.9% 的参数免掉这三笔</button>
+      <button class="opt">激活值，LoRA 减少了激活</button>
+    </div>
+    <div class="explain">冻结是省钱的根源：LoRA 参数只占 0.1%，它们的 16B/参数开销几乎可忽略 —— 图 1 的四笔大账对 99.9% 的参数只剩「权重 2B」一笔。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">低秩：ΔW = B·A 的几何</h2></div>
+  <p class="level-goal">本层目标：拖 rank 滑块，理解「小改动天然低秩」。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · rank 滑块：ΔW 的自由度（拖我！）</div>
+    <div style="display:flex;align-items:center;gap:14px;margin:10px 0">
+      <input type="range" id="rankSlider" min="0" max="7" step="1" value="3" style="flex:1">
+      <span id="rankLabel" style="font-family:monospace;font-weight:bold;color:var(--accent1);min-width:50px">r=16</span>
+    </div>
+    <canvas id="rankCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">不动 W，学一个增量 ΔW = B·A：B 是 d×r 竖条、A 是 r×k 横条，乘积却覆盖 d×k 全尺寸。自由度 r×(d+k) vs 全量 d×k —— <strong>r=16 只用 0.8% 的参数</strong>，却装得下「客服腔调/法律语感/JSON 格式」级的改动。为什么够？因为微调改变的是行为模式而非世界知识 —— 模式是少数几个方向的组合，天 rank 低。r 的经验值：风格 8-16，领域 32-64；再往上边际收益骤减。</p>
+  </div>
+
+  <div class="formula">
+    h = Wx + B·A·x · 参数量 r(d+k)/dk · B 初始为 0（训练从 ΔW=0 出发）
+    <span class="ann">推理时可合并: W' = W + B·A — 零额外延迟; 也可不合并, 一个基座热插拔多个 LoRA (客服版/法律版)</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">QLoRA：三连击 1.1TB → 48GB</h2></div>
+  <p class="level-goal">本层目标：记住三个组件怎么叠加出 23 倍压缩。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 同是微调 70B：三档方案显存对比</div>
+    <canvas id="cmpCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">QLoRA 三连击：① 冻结（省梯度+优化器）② 低秩（ trainable 只剩 0.1%）③ 底座压 <a href="quantization.html">NF4</a>（权重 140→35GB），LoRA 参数保持 fp16 训练，分页优化器防峰值溢出。效果锚点：LoRA 论文 175B r=8 追平全参微调；QLoRA 的 guanaco 65B 单 48G 卡训练达 ChatGPT 99.3% 性能。<strong>消费级显卡微调大模型，从论文到常识只用了两年。</strong></p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>QLoRA 为什么把 LoRA 参数保持 fp16 而不一起压 4bit？</p>
+    <div class="options">
+      <button class="opt">为了省显存</button>
+      <button class="opt">因为 4bit 不支持反向传播</button>
+      <button class="opt">要训练的参数需要精确梯度流动 — 4bit 量化误差（量化页的 ±scale/2）对「冻结的存储」无害，但会污染正在学习的小矩阵的更新方向</button>
+    </div>
+    <div class="explain">冻结的和训练的要求不同：前者只要「记得住」，后者还要「学得动」—— 一套方案里两种精度各司其职，这正是 QLoRA 的工程美感。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">家族：冻结思想的亲戚们</h2></div>
+  <p class="level-goal">本层目标：把 LoRA 放进「冻结大部·只训小部」的思想谱系。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 冻结思想家族</div>
+    <canvas id="familyCanvas" style="width:100%;height:160px"></canvas>
+    <p class="viz-note"><a href="mostik.html">Mostik</a> 冻结 753B+4B 双模型只训 bridge、<a href="vit-clip.html">CLIP 线性探测</a>冻结骨干只训分类头、Adapter 层间插小模块、Prefix 只学软提示 —— 加上 LoRA，五兄弟共享同一个洞察：<strong>大模型的知识已经够用，任务适配只需要动很小一块</strong>。这个「很小」能小到什么程度，每代论文都在刷新下限。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">落地：决策表与坑</h2></div>
+  <p class="level-goal">本层目标：面对真实需求知道选哪条路，并避开灾难性遗忘。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · LoRA vs 全参 vs RAG 决策表</div>
+    <canvas id="decisionCanvas" style="width:100%;height:220px"></canvas>
+    <p class="viz-note">一句话版：<strong>换知识用 RAG（随时更新），改行为用 LoRA（便宜够用），数据巨大且预算充足才全参</strong>。现实总是混搭 —— 知识外挂、行为微调（<a href="rag.html">RAG 页</a>的三方案表在此兑现）。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 灾难性遗忘：冻结本身就是保险</div>
+    <canvas id="forgetCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">全参微调的真实风险：学新忘旧（通用能力掉分）。LoRA 天然温和 —— 基座没动过，地基不会塌；再混 5-10% 通用数据双保险。另一个常见坑：LoRA 学不会「新知识」（它改的是行为不是记忆）—— 想让模型认识你家产品文档，那是 <a href="rag.html">RAG</a> 的活。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>训练显存 = 16B/参数（权重+梯度+母版+Adam）— 70B 全参 1.1TB（L1）</li>
+      <li>LoRA：冻结 W，只训 ΔW=B·A — r=16 只 0.8% 参数，行为级改动够用（L2）</li>
+      <li>QLoRA 三连击：冻结+低秩+NF4 底座 → 1.1TB→48GB，单卡微调 70B（L3）</li>
+      <li>冻结思想家族：Mostik 桥/Adapter/Prefix/线性探测 —— 同一洞察五种形态（L4）</li>
+      <li>决策：换知识 RAG、改行为 LoRA、大数据+预算才全参；冻结自带防遗忘（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>LoRA</dt><dd>低秩适配（Low-Rank Adaptation）—— 冻结基座，学习 ΔW=B·A 的微调方法。</dd>
+    <dt>rank (r)</dt><dd>低秩分解的秩 —— 增量的自由度；风格 8-16、领域 32-64 的经验档位。</dd>
+    <dt>PEFT</dt><dd>参数高效微调总称 —— LoRA/Adapter/Prefix/Prompt tuning 全家。</dd>
+    <dt>QLoRA</dt><dd>4bit NF4 冻结底座 + fp16 LoRA + 分页优化器 —— 单卡微调大模型的组合拳。</dd>
+    <dt>灾难性遗忘</dt><dd>微调学新任务时旧能力掉分 —— 冻结与数据混入是对策。</dd>
+    <dt>热插拔</dt><dd>不合并 B·A 进 W，一个基座运行时切换多个 LoRA —— 模型的「外设」。</dd>
+    <dt>NF4</dt><dd>QLoRA 的 4bit 分位格式（正态分布友好的格点分布）—— 量化页的进阶版。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="quantization.html">Quantization</a>（NF4 与 16B/参数账的源头）· <a href="rag.html">RAG</a>（知识 vs 行为的另一半决策）· <a href="mostik.html">Mostik</a>（只训桥的亲戚）· <a href="rlhf.html">RLHF</a>（SFT 阶段的工程选择）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · LoRA/PEFT · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="lora.js"></script>
+</body>
+</html>
