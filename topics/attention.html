@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-Attention / QKV — 全站的枢纽</title>
+<meta name="description" content="注意力机制：it 指代热力图、QKV 三角色、√d 缩放交互、多头与 GQA、因果掩码、参数账 —— 20 页知识库被引用最多的一页。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① "it"</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② QKV</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ √d</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 多头/GQA</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 枢纽</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>Attention</div>
+    <div class="topic-kicker">LLM 基础 · 枢纽概念</div>
+    <h1 class="topic-title">Self-Attention / QKV</h1>
+    <p class="topic-sub">"The animal didn't cross the street because <strong>it</strong> was too tired" —— "it" 指谁？没有规则、没有语法表，模型用一次点积就算出来：55% 的注意力给了 animal。本页是全站被引用最多却迟迟没讲的概念 —— KV Cache 存的 K/V、FlashAttention 优化的 QKᵀ、MoE 留下的一半、采样页 logits 的源头，全部从这一页出发。</p>
+    <div class="topic-meta">
+      <span class="tag">指代热力图（点击）</span>
+      <span class="tag">√d 缩放开关</span>
+      <span class="tag">约 12 分钟</span>
+      <span class="tag">前置：<a href="tokenizer.html" style="color:inherit">Tokenizer</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">"it" 指什么：注意力在算相关性</h2></div>
+  <p class="level-goal">本层目标：点击任意词，亲眼看到"谁在看谁"。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 指代消解热力图（点我！）</div>
+    <canvas id="itCanvas" style="width:100%;height:160px;cursor:pointer"></canvas>
+    <p class="viz-note">点粉色的 <strong>it</strong>：55% 注意力落在 animal；把句尾换成 "wide"，注意力会转向 street —— <strong>同一个 it，不同语境看不同对象</strong>。这一切没有任何语言学规则：Q·K 点积的相似度计算自然涌现出指代、句法、语义。每个词、每一层、每次前向都在动态重算"我该看谁"。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么说注意力是"动态的"？（对照 CNN 的固定卷积）</p>
+    <div class="options">
+      <button class="opt">因为参数一直在更新</button>
+      <button class="opt">权重（看谁的分布）不是参数而是激活值 —— 由当前输入实时算出，同一句话换个词分布就变</button>
+      <button class="opt">因为用了随机数</button>
+    </div>
+    <div class="explain">卷积核是训练后冻结的固定模式；attention 权重是每次前向现算的 —— 这就是它能做指代消解而卷积不能的原因。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">QKV：图书馆的三角色</h2></div>
+  <p class="level-goal">本层目标：记住 Q/K/V 的分工与四步公式。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · Q 查什么 / K 是什么 / V 装什么</div>
+    <canvas id="qkvCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">三个矩阵把同一个词投影成三种角色：Q 是"我要找什么"，K 是"我的标签"，V 是"我的内容"。<strong>相似度（QKᵀ）与内容（V）解耦</strong> —— 决定看谁和决定取什么分开学，这是注意力设计的天才之处。同一个词做查询时用 Q、被看时用 K、被取时用 V —— 三顶帽子轮流戴。</p>
+  </div>
+
+  <div class="formula">
+    Attention(Q,K,V) = softmax(QKᵀ/√d)·V · QKV = x·Wq, x·Wk, x·Wv
+    <span class="ann">每个 attention 层学的东西就是 Wq/Wk/Wv/Wo 四个矩阵 —— 词向量进来，问句/标签/内容三视角出来</span>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">√d：一行公式的救场</h2></div>
+  <p class="level-goal">本层目标：点开关看 softmax 饱和，理解为什么必须除以 √d。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · 缩放开关（点按钮对比）</div>
+    <div style="display:flex;gap:10px;margin:10px 0">
+      <button id="scaleBtn" class="opt" style="border:1px solid var(--border)">√d 缩放: 开 (点我关掉)</button>
+    </div>
+    <canvas id="scaleCanvas" style="width:100%;height:200px"></canvas>
+    <p class="viz-note">实测：d=64 维向量的随机点积 std≈8（理论 √d）—— 不缩放的话 logits 轻松到 ±13，softmax 输出 99.9%/0.01%：<strong>one-hot 宣判，其余候选梯度 ≈ e⁻¹³ ≈ 0，学不动</strong>。除以 √d 把 std 压回 1，softmax 恢复"温和询问"。一行公式救了整个机制 —— 论文里最容易被跳过、却最不可缺的一句。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>为什么点积的方差随 d 线性涨？</p>
+    <div class="options">
+      <button class="opt">因为向量更长</button>
+      <button class="opt">因为权重更大</button>
+      <button class="opt">点积是 d 项独立随机变量之和 —— 方差可加，d 项方差相加 → std = √d；除以 √d 恰好把每一项的方差贡献归一化</button>
+    </div>
+    <div class="explain">概率论基础题救了深度学习：Var(Σxᵢyᵢ) = ΣVar(xᵢyᵢ) = d·Var(xy) → std=√d。这也是 <a href="sampling.html">采样页</a>温度的镜像问题：那里我们想让分布更尖，这里我们必须防止它太尖。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">多头与 GQA：32 个视角 + 缩水术</h2></div>
+  <p class="level-goal">本层目标：理解多头分工，以及 GQA 怎么把 KV Cache 砍到 13%。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · 多头分工（左）+ GQA 削减（右）</div>
+    <canvas id="headsCanvas" style="width:100%;height:180px"></canvas>
+    <p class="viz-note">4096 维切成 32 个 128 维的头，各自学一种关系：指代、句法、位置、同义……<strong>一次前向 = 32 种视角并行</strong>。GQA 的洞察：Q 必须每头独立（视角不能合并），但 <strong>K/V 可以共享</strong> —— 32 个 Q 头共用 4 个 KV 头，KV Cache 从 0.50 降到 0.06MB/token（<a href="kv-cache.html">KV Cache 页</a>的口径就藏在 Q:KV 比例里），质量几乎不掉 —— Llama-3 的默认选择。</p>
+  </div>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 因果掩码：只看前文的下三角</div>
+    <canvas id="maskCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">训练时若不遮挡，位置 1 能偷看位置 6 的答案 —— loss 直接归零，什么也学不到。掩码成下三角后：<strong>一次前向同时产出全部位置的监督信号</strong>（教师强制），训练效率 ×N。而推理时只有最后一行有用 —— 这正是 <a href="kv-cache.html">KV Cache</a> 只需存 K/V、每步只算一行 QKᵀ 的原因。N×N 的下三角也是 <a href="flash-attention.html">FlashAttention 页</a>N² 显存墙的出处。</p>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">枢纽：全站从这里出发</h2></div>
+  <p class="level-goal">本层目标：看清 attention 在架构中的位置，以及它如何串起整个知识库。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 6 · 参数账（左）+ 全站枢纽图（右）</div>
+    <canvas id="hubCanvas" style="width:100%;height:190px"></canvas>
+    <p class="viz-note">每层参数账：attention 4d²=67M 只占 25%，FFN 8d²=201M 占 75% —— <a href="moe.html">MoE 页</a>换掉的正是 FFN，attention 原封不动（信息路由比特征变换更难稀疏化）。2017 年论文标题 "Attention Is All You Need" 的本意是"<strong>不再需要 RNN/CNN</strong>" —— 序列建模从此只剩一种操作：算相关性、取信息。</p>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>注意力 = 动态相关性：权重是激活不是参数，同一词不同语境看不同对象（L1）</li>
+      <li>QKV 分工：Q 查什么、K 是什么、V 装什么 —— 相似度与内容解耦（L2）</li>
+      <li>√d 缩放：点积 std=√d，不除则 softmax 饱和 one-hot、梯度归零（L3）</li>
+      <li>多头 = 多视角并行；GQA 共享 K/V 把 Cache 砍到 13%（L4）</li>
+      <li>attention 只占 25% 参数 —— MoE 换 FFN 不换它；全站 20 页从这里出发（L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>Q / K / V</dt><dd>查询/键/值 —— 同一词的三种投影角色：找什么/是什么/装什么。</dd>
+    <dt>缩放点积注意力</dt><dd>softmax(QKᵀ/√d)·V —— √d 防止 softmax 饱和的关键除法。</dd>
+    <dt>多头注意力 (MHA)</dt><dd>d 维切 h 份并行算注意力 —— 每头学一种关系。</dd>
+    <dt>GQA / MQA</dt><dd>分组/多查询注意力：多个 Q 头共享少数 KV 头 —— KV Cache 缩减术。</dd>
+    <dt>因果掩码</dt><dd>下三角遮挡：只看前文 —— 训练防作弊、并行监督的基础。</dd>
+    <dt>教师强制 (teacher forcing)</dt><dd>训练时用真实前文做输入 —— 掩码让它一次前向监督全部位置。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">下一站：<a href="kv-cache.html">KV Cache</a>（把这里的 K/V 存起来）· <a href="flash-attention.html">FlashAttention</a>（把这里的 QKᵀ 算得省）· <a href="moe.html">MoE</a>（留下这里、换掉 FFN）· <a href="sampling.html">采样策略</a>（logits 的下一站）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · Attention · 图解版</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="attention.js"></script>
+</body>
+</html>
