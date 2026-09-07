@@ -43,6 +43,7 @@
 - [Lost in the Middle](topics/litm.html) — 长上下文 · 注意力盲区 · U 形曲线 + needle 位置模拟器 + 排序工程清单（前置：Attention + RoPE）
 - [模型合并](topics/merging.html) — 权重空间 · 免训练多任务 · 任务向量四则运算 + 夹角冲突模拟器 + DARE 干扰账（前置：LoRA）
 - [梯度爆炸与消失](topics/gradients.html) — 训练地基 · 链式连乘账 + 梯度生存模拟器 + 四药对照 + 架构史时间线（前置：交叉熵 + 残差流）
+- [优化器与 AdamW](topics/optimizer.html) — 训练地基 · 三优化器竞速 + 谷形滑块 + m+v 状态账 + warmup/cosine（前置：梯度 + 交叉熵）
 
 ## 页面结构（五层）
 

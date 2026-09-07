@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>优化器与 AdamW — 梯度给方向，优化器定步法</title>
+<meta name="description" content="优化器：SGD 锯齿、Momentum 惯性、Adam 每参数自适应步长 —— 三优化器同屏竞速；AdamW 解耦 decay、m+v 8B/参数的状态账（LoRA 页 1.1TB 的主犯）、warmup+cosine 调度 —— 交叉熵（分数）→梯度（方向）→优化器（步法）训练机制链收口。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="level-nav">
+  <a href="#l1"><span class="dot"></span><span class="lbl">① 步长</span></a>
+  <a href="#l2"><span class="dot"></span><span class="lbl">② 震荡</span></a>
+  <a href="#l3"><span class="dot"></span><span class="lbl">③ 竞速</span></a>
+  <a href="#l4"><span class="dot"></span><span class="lbl">④ 修正</span></a>
+  <a href="#l5"><span class="dot"></span><span class="lbl">⑤ 账本</span></a>
+  <a href="../index.html"><span class="dot" style="background:var(--accent2)"></span><span class="lbl">← 目录</span></a>
+</nav>
+
+<header class="topic-header">
+  <div class="container">
+    <div class="crumbs"><a href="../index.html">learning</a><span class="sep">/</span>optimizer</div>
+    <div class="topic-kicker">训练地基 · 步法的科学</div>
+    <h1 class="topic-title">优化器与 AdamW</h1>
+    <p class="topic-sub"><a href="crossentropy.html">交叉熵页</a>给了分数，<a href="gradients.html">梯度页</a>给了方向 —— 但<strong>拿到梯度之后怎么走这一步</strong>，全站 30 页训练叙事还空着最后一块：学习率为什么不能一步到位？SGD 为什么在陡谷里锯齿？动量怎么把噪声散步变成滑雪？Adam 为什么给每个参数<strong>各配各的步长</strong>？还有那笔隐藏账 —— <strong>Adam 的 m+v 状态 = 8 字节/参数，正是 LoRA 页「训练贵 8 倍」的主犯</strong>。</p>
+    <div class="topic-meta">
+      <span class="tag">三优化器竞速</span>
+      <span class="tag">谷形滑块</span>
+      <span class="tag">约 8 分钟</span>
+      <span class="tag">前置：<a href="gradients.html" style="color:inherit">梯度</a> · <a href="crossentropy.html" style="color:inherit">交叉熵</a></span>
+    </div>
+  </div>
+</header>
+
+<main class="container prose">
+
+<section class="level" id="l1">
+  <div class="level-banner"><span class="level-num">LAYER 1</span><h2 class="level-title">步长：学习率的两头死法</h2></div>
+  <p class="level-goal">本层目标：理解「方向有了，步子多大」是个独立问题。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 1 · 同一个碗，三种学习率（node 实算轨迹）</div>
+    <canvas id="lrCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">更新式只有一行：<strong>w ← w − η·g</strong> —— 梯度 g 给方向，η（学习率）给步长。太小时像蜗牛（每步挪一丝，预算烧完还没到谷底）；恰当时平稳下滑；<strong>超过稳定上限 2/a（a=谷的陡度）时在两侧越弹越远 —— node 实测 lr=0.25 时 40 步弹到 |w|=4414 万，彻底发散</strong>。方向是免费的，步长是要调的 —— 「lr=3e-4 万金油」就是在这两个死法之间找的保守带。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 1</div>
+    <p>为什么学习率不能「先设大点快点收敛，不行再调小」？</p>
+    <div class="options">
+      <button class="opt">可以，这是标准做法</button>
+      <button class="opt">发散是正反馈：一旦弹飞，loss 和梯度都爆炸，训练状态已毁 —— 只能从 checkpoint 重来；「大 lr 探路」每次都要付出重启代价</button>
+      <button class="opt">大学习率会溢出 GPU 显存</button>
+    </div>
+    <div class="explain">lr 的两个死法不对称：小了只是慢（能救），大了是死（难救）—— 所以默认偏保守。</div>
+  </div>
+</section>
+
+<section class="level" id="l2">
+  <div class="level-banner"><span class="level-num l2">LAYER 2</span><h2 class="level-title">震荡：SGD 的锯齿病理</h2></div>
+  <p class="level-goal">本层目标：看懂最陡下降不是最快下降。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 2 · 各向异性谷：陡轴震荡 + 平轴爬行</div>
+    <canvas id="zigCanvas" style="width:100%;height:240px"></canvas>
+    <p class="viz-note">真实 loss 面不是圆碗，是<strong>狭长谷</strong>：陡方向（x）平方向（y）曲率差 20:1。SGD 的困境（node 实测前 30 步 |x| 震荡到 2.0 来回跳）：步长受限于陡轴稳定上限 —— <strong>在陡轴上不发散的最大步，对平轴来说小得可怜</strong> —— 于是快轴震荡、慢轴爬行，两头的步长需求打架。解药只有两类：给更新加惯性（跨步平均掉震荡），或给每个方向各配步长 —— 正是下层的两大优化器家族。</p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 2</div>
+    <p>狭长谷里 SGD 慢的根本原因是？</p>
+    <div class="options">
+      <button class="opt">梯度算得不准</button>
+      <button class="opt">GPU 并行度不够</button>
+      <button class="opt">一个全局步长伺候两个曲率：步长上限由陡轴决定（再大就震荡发散），平轴只能用这个「过小」的步长慢慢爬 —— 各向异性下单尺码必然不合身</button>
+    </div>
+    <div class="explain">记住这个「单尺码」困境 —— Momentum 和 Adam 分别用两种方式破了它。</div>
+  </div>
+</section>
+
+<section class="level" id="l3">
+  <div class="level-banner"><span class="level-num l3">LAYER 3</span><h2 class="level-title">竞速：三种步法同屏</h2></div>
+  <p class="level-goal">本层目标：亲眼看三种优化器的性格。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 3 · SGD / Momentum / Adam 竞速（拖滑块调谷形陡峭比，真梯度下降实时跑）</div>
+    <div style="margin:10px 0;display:flex;align-items:center;gap:10px">
+      <span style="font-size:13px;color:var(--text-dim)">谷形陡峭比 (a:b)</span>
+      <input type="range" id="bowlSlider" min="1" max="10" value="5" style="flex:1">
+      <span id="bowlVal" style="font-size:13px;font-family:monospace;color:var(--text)">50:1</span>
+    </div>
+    <canvas id="raceCanvas" style="width:100%;height:280px"></canvas>
+    <p class="viz-note">真跑梯度下降（与 node 验证同码）：同一起点、同一噪声，三条轨迹的性格差异一目了然 —— <strong>SGD</strong>（蓝）陡轴锯齿平轴蜗行；<strong>Momentum</strong>（绿）β=0.9 的指数平均把震荡抵消、把一致方向加速 —— 「重球下山」，惯性跨过噪声；<strong>Adam</strong>（橙）双账户：<strong>m（一阶矩）记方向共识、v（二阶矩）记各参数梯度大小</strong> —— 更新 = m/√v，梯度大的参数步长自动缩小、梯度小的自动放大 —— <strong>每个参数自己的 lr</strong>。拖动滑块把谷拉得更扁，看 SGD 越来越惨、Adam 稳如老狗。</p>
+  </div>
+
+  <div class="quiz" data-answer="0">
+    <div class="q-tag">认知检查 · LAYER 3</div>
+    <p>Adam 的 m/√v 为什么等于「每个参数自适应步长」？</p>
+    <div class="options">
+      <button class="opt">v 是每个参数自己的梯度幅度历史 —— 除以 √v 后，梯度一直很大的参数步子自动变小、一直很小的自动变大：步长不再由全局曲率最险的方向决定</button>
+      <button class="opt">因为 m 和 v 会互相抵消</button>
+      <button class="opt">因为 Adam 学习率设得更大</button>
+    </div>
+    <div class="explain">v 就是对「这个参数平时梯度多大」的在线估计 —— Adam 给每个参数发了自己的尺子。</div>
+  </div>
+</section>
+
+<section class="level" id="l4">
+  <div class="level-banner"><span class="level-num l4">LAYER 4</span><h2 class="level-title">修正：AdamW 与那笔隐藏账</h2></div>
+  <p class="level-goal">本层目标：会算优化器的显存账、分清 Adam 与 AdamW。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 4 · m+v 状态账 + AdamW 解耦修正 + 调度曲线</div>
+    <canvas id="fixCanvas" style="width:100%;height:270px"></canvas>
+    <p class="viz-note"><strong>状态账</strong>：Adam 每参数要带两个 fp32 账本（m+v = <strong>8 字节/参数</strong>）—— 70B 模型仅优化器状态就 <strong>560GB</strong>，加上权重梯度才是 <a href="lora.html">LoRA 页</a>那笔 1.1TB 训练账的主犯 —— 「训练贵 8 倍」的隐藏主谋原来是优化器的记性。<strong>AdamW 修正</strong>：原 Adam 把 weight decay 混进梯度（被 v 缩放，大梯度参数的 decay 失效）—— AdamW 把 decay <strong>解耦</strong>出来直接乘权重，正则力度人人平等 —— LLM 事实标准。<strong>调度</strong>：warmup（前 0.5-1% 步数从 0 爬到峰值 —— v 还没热身，大步不稳）+ cosine（峰值退到 ~10% —— 末期小步精修）—— 全站训练曲线的标准形状。</p>
+  </div>
+
+  <div class="quiz" data-answer="1">
+    <div class="q-tag">认知检查 · LAYER 4</div>
+    <p>为什么 LoRA 只训低秩小卡就能绕开 8B/参数的状态账？</p>
+    <div class="options">
+      <button class="opt">因为 LoRA 用了特殊的省内存优化器</button>
+      <button class="opt">m/v 状态只为「被训练的参数」存在：冻结的基座权重不需要状态 —— LoRA 冻结 99.2%，状态账也只剩 0.8% —— 冻结思想在显存账上的直接红利</button>
+      <button class="opt">因为低秩矩阵用 4bit 存储</button>
+    </div>
+    <div class="explain">LoRA 页「冻结大部只训小部」的五重红利里，最容易被忽略的就是这份优化器状态账。</div>
+  </div>
+</section>
+
+<section class="level" id="l5">
+  <div class="level-banner"><span class="level-num l5">LAYER 5</span><h2 class="level-title">账本：训练机制链收口</h2></div>
+  <p class="level-goal">本层目标：把训练的机制链拼完整。</p>
+
+  <div class="viz">
+    <div class="viz-title">图 5 · 分数 → 方向 → 步法 → 预算</div>
+    <canvas id="chainCanvas" style="width:100%;height:250px"></canvas>
+    <p class="viz-note">一次训练的完整机制链至此闭环：<strong>交叉熵</strong>（这个 token 该罚几分）→ <strong>梯度</strong>（链式法则把罚分分摊到每个权重，残差 +I 保通路）→ <strong>优化器</strong>（AdamW 决定每个参数这一步走多远）→ <strong>Scaling Laws</strong>（多少预算、多大模型、多少数据）—— <a href="pretraining.html">Pretraining 页</a>的引擎室全部拆完。2026 现状：AdamW 仍是默认，Muon（正交化动量）等新秀在等比例验证中 —— 但「方向×步长」的框架不会过时。<strong>训练线四页合龙：loss 是什么 → 怎么流 → 怎么走 → 降多快。</strong></p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <div class="q-tag">认知检查 · LAYER 5</div>
+    <p>「方向 × 步长」框架为什么不会因为新优化器出现而过时？</p>
+    <div class="options">
+      <button class="opt">因为 Adam 已经是最优的</button>
+      <button class="opt">因为框架有专利保护</button>
+      <button class="opt">任何优化器的更新都可分解为「往哪走 × 走多远」：Momentum 改的是方向的组合方式，Adam 改的是步长的分配方式，Muon 改的是方向的几何 —— 变量一直在换代，框架本身是定义</button>
+    </div>
+    <div class="explain">读新优化器论文的姿势：先问它改了方向、步长、还是两者的耦合方式。</div>
+  </div>
+
+  <div class="keytakeaway">
+    <h4>带走的五句话</h4>
+    <ul>
+      <li>lr 两头死法不对称：小了慢（能救）、大了发散（难救）—— 稳定上限 2/a（L1）</li>
+      <li>狭长谷单尺码困境：步长上限被陡轴锁死，平轴只能蜗行（L2）</li>
+      <li>Momentum=惯性抵震荡，Adam=m/√v 每参数自己的尺子（L3）</li>
+      <li>m+v = 8B/参数：70B 仅状态就 560GB —— LoRA 冻结绕开的正是这本账（L4）</li>
+      <li>AdamW 解耦 decay + warmup/cosine 调度 = LLM 训练默认套餐（L4/L5）</li>
+    </ul>
+  </div>
+
+  <h3>术语速查</h3>
+  <dl class="glossary">
+    <dt>SGD (随机梯度下降)</dt><dd>w ← w − η·g —— 一阶方法的祖师爷，小批量带来噪声。</dd>
+    <dt>Momentum / 动量</dt><dd>更新的指数移动平均 —— 惯性抵消震荡方向、加速一致方向。</dd>
+    <dt>Adam</dt><dd>一阶矩 m（方向共识）+ 二阶矩 v（各参数梯度幅度）→ 每参数自适应步长。</dd>
+    <dt>AdamW</dt><dd>weight decay 与梯度更新解耦的 Adam —— LLM 训练事实标准。</dd>
+    <dt>weight decay</dt><dd>权重正则 —— 每步向零收缩权重，防过拟合；混进梯度会被 v 缩放。</dd>
+    <dt>warmup</dt><dd>训练初期学习率从 0 爬升 —— 等 Adam 的 v 统计热身。</dd>
+    <dt>cosine 调度</dt><dd>lr 沿余弦曲线从峰值退火 —— 末期小步精修。</dd>
+    <dt>条件数 (condition number)</dt><dd>最陡/最平曲率之比 —— 越大谷越狭长，SGD 越难受。</dd>
+    <dt>Muon</dt><dd>正交化动量的新优化器 —— 2025-26 训练圈热点。</dd>
+  </dl>
+
+  <p style="margin-top:36px;color:var(--text-dim)">相关：<a href="gradients.html">梯度爆炸与消失</a>（方向怎么来的）· <a href="crossentropy.html">交叉熵</a>（分数怎么算的）· <a href="lora.html">LoRA</a>（8B/参数状态账的绕开法）· <a href="pretraining.html">Pretraining</a>（引擎室的宿主）· <a href="scaling.html">Scaling Laws</a>（预算的宏观账）· <a href="precision.html">浮点精度</a>（m/v 用 fp32 的原因）。</p>
+</section>
+
+</main>
+
+<footer class="topic-footer container">
+  <span>learning · optimizer · 图解版 · 训练机制链收口</span>
+  <span><a href="../index.html">← 返回目录</a> · <a href="https://github.com/atyou2happy/learning">GitHub</a></span>
+</footer>
+
+<script src="../assets/app.js"></script>
+<script src="optimizer.js"></script>
+</body>
+</html>
